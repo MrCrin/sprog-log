@@ -294,6 +294,30 @@
       );
     }
 
+    // Custom X-axis tick mark. Month ticks are drawn noticeably longer
+    // (and with a labeled month) than the in-between week ticks, so the
+    // two tick types are visually distinct at a glance.
+    function XAxisTick({ x, y, isMonthTick, label }) {
+      const tickLength = isMonthTick ? 10 : 4;
+      return (
+        <g transform={"translate(" + x + "," + y + ")"}>
+          <line
+            x1={0}
+            y1={0}
+            x2={0}
+            y2={tickLength}
+            stroke="#94a3b8"
+            strokeWidth={isMonthTick ? 1.5 : 1}
+          />
+          {label && (
+            <text x={0} y={tickLength + 12} textAnchor="middle" fontSize={12} fill="#64748b">
+              {label}
+            </text>
+          )}
+        </g>
+      );
+    }
+
     function App() {
       const [entries, setEntries] = useState([]);
       const [profile, setProfile] = useState(undefined); // undefined = not yet loaded, null = needs onboarding
@@ -366,7 +390,7 @@
 
       useEffect(() => {
         if (profile) {
-          document.title = profile.name + "'s Weight Tracker";
+          document.title = profile.name + "'s Sprog Log";
         }
       }, [profile]);
 
@@ -892,8 +916,7 @@
             <div className="flex flex-col md:flex-row md:justify-between md:items-end gap-4 mb-8">
               <div className="flex items-start gap-3">
                 <div>
-                  <h1 className="text-2xl font-bold tracking-tight">{profile.name}'s Weight Tracker</h1>
-                  <p className="text-slate-500 text-sm mt-1">Track {profile.name}'s growth against standard percentiles</p>
+                  <h1 className="text-2xl font-bold tracking-tight">{profile.name}'s Sprog Log</h1>
                 </div>
                 <button
                   onClick={openSettingsModal}
@@ -933,17 +956,23 @@
                     allowDataOverflow={true}
                     ticks={xAxisTicks}
                     interval={0}
-                    tickFormatter={formatAxisDate}
                     stroke="#94a3b8"
-                    tick={{ fill: '#64748b', fontSize: 12 }}
-                    tickMargin={10}
+                    tickLine={false}
+                    tick={(props) => (
+                      <XAxisTick
+                        {...props}
+                        isMonthTick={xAxisMonthTicks.has(props.payload.value)}
+                        label={formatAxisDate(props.payload.value)}
+                      />
+                    )}
+                    tickMargin={0}
                     height={40}
                     scale="time"
                   />
                   <YAxis 
                     domain={[yAxisMin, yAxisMax]}
                     allowDataOverflow={true}
-                    tickFormatter={(val) => val + "g"}
+                    tickFormatter={(val) => (val / 1000) + "kg"}
                     stroke="#94a3b8"
                     tick={{ fill: '#64748b', fontSize: 12 }}
                     tickMargin={8}

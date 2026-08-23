@@ -12,7 +12,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Mobile layout is less cramped: the main container now fills the screen edge-to-edge on mobile (no card background, border, rounded corners, or shadow), with that styling still applied from `md` breakpoints up. Outer and inner padding on mobile is halved.
 - The growth chart remains a permanent fixture at the top of the page. Below it, the weight tools (Prediction Settings / Add Measurement / History) and milestone tools (Add Milestone / History) are now grouped into a single bordered container with a "Weight" / "Milestones" tab strip attached to its header, so only one group is visible at a time instead of both stacking vertically. These top-level tabs use a flat, underlined style, visually distinct from the pill-shaped sub-tabs inside each panel.
 - Reduced outer and inner container padding further for a more compact layout.
-- On mobile, the growth chart now spans the same width as the title and other containers (no extra side padding), and its X-axis ticks are now aligned to calendar months instead of a mash of irregular data-point dates.
+- On mobile, the growth chart now spans the same width as the title and other containers (no extra side padding), and its X-axis ticks are now aligned to calendar months instead of a mash of irregular data-point dates. Month ticks are drawn longer than the in-between week ticks to be visually distinct.
+- Renamed the page header from "{Child}'s Weight Tracker" to "{Child}'s Sprog Log" and removed the "Track {Child}'s growth..." sub-heading.
+- Y-axis weight labels now show kilograms (e.g. "4.5kg") instead of grams, to take up less horizontal space.
 
 ## [1.1.0]
 
