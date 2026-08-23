@@ -1,0 +1,961 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sprog Log</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- Pinned all dependencies to exact versions to prevent future silent crashes -->
+  <script crossorigin src="https://unpkg.com/react@18.2.0/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/prop-types@15.8.1/prop-types.min.js"></script>
+  <script src="https://unpkg.com/react-is@18.2.0/umd/react-is.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.24.4/babel.min.js"></script>
+  <script src="https://unpkg.com/recharts@2.1.12/umd/Recharts.js"></script>
+</head>
+<body class="bg-slate-50">
+  <div id="root"></div>
+  <script type="text/babel">
+    const { useState, useMemo, useEffect, useRef } = React;
+    const { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } = window.Recharts;
+
+    // Updated to exact UK-WHO Girls Weight-for-Age centiles (in grams)
+    const PERCENTILE_MILESTONES = [
+      { months: 0, p2: 2400, p9: 2700, p25: 3000, p50: 3200, p75: 3600, p91: 4000, p98: 4200 },
+      { months: 1, p2: 3200, p9: 3500, p25: 3900, p50: 4200, p75: 4600, p91: 5100, p98: 5500 },
+      { months: 2, p2: 3900, p9: 4300, p25: 4700, p50: 5100, p75: 5600, p91: 6100, p98: 6600 },
+      { months: 3, p2: 4500, p9: 4900, p25: 5400, p50: 5800, p75: 6400, p91: 6900, p98: 7500 },
+      { months: 4, p2: 5000, p9: 5500, p25: 6000, p50: 6400, p75: 7100, p91: 7700, p98: 8200 },
+      { months: 6, p2: 5700, p9: 6300, p25: 6900, p50: 7300, p75: 8100, p91: 8800, p98: 9500 },
+      { months: 9, p2: 6500, p9: 7200, p25: 7800, p50: 8200, p75: 9100, p91: 10000, p98: 10800 },
+      { months: 12, p2: 7000, p9: 7800, p25: 8500, p50: 8900, p75: 9900, p91: 11000, p98: 11900 },
+    ];
+
+    // WHO LMS parameters for Girls Weight-for-Age (0-12 months)
+    const WHO_LMS_GIRLS = [
+      { m: 0,  L: -0.3833, M: 3.2322, S: 0.14171 },
+      { m: 1,  L: -0.3833, M: 4.1981, S: 0.13407 },
+      { m: 2,  L: -0.3833, M: 5.1278, S: 0.12658 },
+      { m: 3,  L: -0.3833, M: 5.8459, S: 0.12157 },
+      { m: 4,  L: -0.3833, M: 6.4234, S: 0.11808 },
+      { m: 5,  L: -0.3833, M: 6.8997, S: 0.11559 },
+      { m: 6,  L: -0.3833, M: 7.2952, S: 0.11379 },
+      { m: 7,  L: -0.3833, M: 7.6256, S: 0.11246 },
+      { m: 8,  L: -0.3833, M: 7.9056, S: 0.11145 },
+      { m: 9,  L: -0.3833, M: 8.1473, S: 0.11068 },
+      { m: 10, L: -0.3833, M: 8.3601, S: 0.11010 },
+      { m: 11, L: -0.3833, M: 8.5511, S: 0.10967 },
+      { m: 12, L: -0.3833, M: 8.7247, S: 0.10934 }
+    ];
+
+    function normalCDF(x) {
+      const t = 1 / (1 + 0.2316419 * Math.abs(x));
+      const d = 0.3989423 * Math.exp(-x * x / 2);
+      let p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))));
+      if (x > 0) p = 1 - p;
+      return p;
+    }
+
+    function getOrdinalSuffix(i) {
+        const j = i % 10, k = i % 100;
+        if (j == 1 && k != 11) return i + "st";
+        if (j == 2 && k != 12) return i + "nd";
+        if (j == 3 && k != 13) return i + "rd";
+        return i + "th";
+    }
+
+    // TODO: add WHO_LMS_BOYS and return it here when sex === 'male'.
+    // Both sexes resolve to the girls dataset for now so the existing
+    // girl profile's chart cannot move.
+    function getLmsTable(sex) {
+      return WHO_LMS_GIRLS;
+    }
+
+    // TODO: add boys UK-WHO milestones and return them here when sex === 'male'.
+    function getMilestones(sex) {
+      return PERCENTILE_MILESTONES;
+    }
+
+    function getExactCentile(weightGrams, ageInDays, sex) {
+      if (ageInDays < 0) ageInDays = 0;
+      const ageInMonths = ageInDays / 30.4375;
+      const lmsTable = getLmsTable(sex);
+
+      let lower = lmsTable[0];
+      let upper = lmsTable[lmsTable.length - 1];
+      
+      for (let i = 0; i < lmsTable.length - 1; i++) {
+        if (ageInMonths >= lmsTable[i].m && ageInMonths <= lmsTable[i+1].m) {
+          lower = lmsTable[i];
+          upper = lmsTable[i+1];
+          break;
+        }
+      }
+      
+      let L, M, S;
+      if (lower.m === upper.m) {
+        L = lower.L; M = lower.M; S = lower.S;
+      } else {
+        const fraction = (ageInMonths - lower.m) / (upper.m - lower.m);
+        L = lower.L + (upper.L - lower.L) * fraction;
+        M = lower.M + (upper.M - lower.M) * fraction;
+        S = lower.S + (upper.S - lower.S) * fraction;
+      }
+      
+      const X = weightGrams / 1000;
+      let Z;
+      if (L === 0) {
+        Z = Math.log(X / M) / S;
+      } else {
+        Z = (Math.pow(X / M, L) - 1) / (L * S);
+      }
+      
+      const percentile = normalCDF(Z) * 100;
+      let roundedPercentile = Math.round(percentile * 10) / 10;
+      if (roundedPercentile <= 0.1) roundedPercentile = 0.1;
+      if (roundedPercentile >= 99.9) roundedPercentile = 99.9;
+      
+      if (Number.isInteger(roundedPercentile)) {
+          return getOrdinalSuffix(roundedPercentile);
+      }
+      return roundedPercentile + "th";
+    }
+
+    // Dynamic linear regression function based on a flexible window size
+    function calculateTrend(entries, windowSize) {
+      if (entries.length < 2 || windowSize < 2) return null;
+      // Get the last N entries based on user selection
+      const recent = [...entries].sort((a,b) => new Date(a.date).getTime() - new Date(b.date).getTime()).slice(-windowSize);
+      
+      // If we don't even have 2 entries in our sliced window, return null
+      if (recent.length < 2) return null;
+      
+      const n = recent.length;
+      const t0 = new Date(recent[0].date).getTime();
+
+      let sumX = 0, sumY = 0, sumXY = 0, sumXX = 0;
+
+      recent.forEach(entry => {
+        const x = (new Date(entry.date).getTime() - t0) / 86400000; // Normalised to days
+        const y = entry.weight;
+        sumX += x;
+        sumY += y;
+        sumXY += x * y;
+        sumXX += x * x;
+      });
+
+      const denominator = (n * sumXX - sumX * sumX);
+      if (denominator === 0) return null;
+
+      const slope = (n * sumXY - sumX * sumY) / denominator;
+      const intercept = (sumY - slope * sumX) / n;
+
+      return { slope, intercept, t0 };
+    }
+
+    // Used for both first-run onboarding (not dismissable) and later edits
+    // via the settings gear (dismissable, prefilled).
+    function ProfileModal({ initialValues, dismissable, onCancel, onSubmit }) {
+      const [name, setName] = useState(initialValues.name || '');
+      const [birthDate, setBirthDate] = useState(initialValues.birth_date || '');
+      const [sex, setSex] = useState(initialValues.sex || '');
+      const [submitting, setSubmitting] = useState(false);
+
+      const handleSubmit = async (e) => {
+        e.preventDefault();
+        if (!name.trim() || !birthDate || !sex) return;
+        setSubmitting(true);
+        try {
+          await onSubmit({ name: name.trim(), birth_date: birthDate, sex });
+        } finally {
+          setSubmitting(false);
+        }
+      };
+
+      return (
+        <div className="w-full min-h-screen p-4 md:p-8 font-sans flex justify-center items-center text-slate-800 bg-slate-900/40">
+          <div className="w-full max-w-md bg-white rounded-2xl shadow-xl border border-slate-200 p-6 md:p-8">
+            <h2 className="text-xl font-bold tracking-tight mb-1">
+              {dismissable ? 'Edit Profile' : 'Welcome! Let\'s set up your tracker'}
+            </h2>
+            <p className="text-slate-500 text-sm mb-6">
+              {dismissable ? 'Update your child\'s details.' : 'Tell us a bit about your child to get started.'}
+            </p>
+            <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-600 mb-1.5">Child's Name</label>
+                <input
+                  type="text"
+                  required
+                  maxLength={60}
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  className="w-full px-4 py-2.5 border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 transition-all bg-white"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-600 mb-1.5">Birth Date</label>
+                <input
+                  type="date"
+                  required
+                  value={birthDate}
+                  onChange={(e) => setBirthDate(e.target.value)}
+                  className="w-full px-4 py-2.5 border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 transition-all bg-white"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-600 mb-1.5">Sex</label>
+                <div className="flex gap-4">
+                  <label className="flex items-center gap-2 text-sm font-medium text-slate-600">
+                    <input type="radio" name="sex" value="female" checked={sex === 'female'} onChange={() => setSex('female')} required />
+                    Girl
+                  </label>
+                  <label className="flex items-center gap-2 text-sm font-medium text-slate-600">
+                    <input type="radio" name="sex" value="male" checked={sex === 'male'} onChange={() => setSex('male')} required />
+                    Boy
+                  </label>
+                </div>
+              </div>
+              <div className="flex gap-2 mt-2">
+                <button
+                  type="submit"
+                  disabled={submitting}
+                  className="flex-1 px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-lg shadow-sm transition-colors focus:ring-4 focus:ring-indigo-500/30 outline-none disabled:opacity-60"
+                >
+                  Save
+                </button>
+                {dismissable && (
+                  <button
+                    type="button"
+                    onClick={onCancel}
+                    className="flex-1 px-6 py-2.5 bg-slate-200 hover:bg-slate-300 text-slate-700 font-medium rounded-lg shadow-sm transition-colors outline-none"
+                  >
+                    Cancel
+                  </button>
+                )}
+              </div>
+            </form>
+          </div>
+        </div>
+      );
+    }
+
+    function App() {
+      const [entries, setEntries] = useState([]);
+      const [profile, setProfile] = useState(undefined); // undefined = not yet loaded, null = needs onboarding
+      const [isLoading, setIsLoading] = useState(true);
+      const [showProfileModal, setShowProfileModal] = useState(false);
+      const [profileForm, setProfileForm] = useState({ name: '', birth_date: '', sex: '' });
+      const [newDate, setNewDate] = useState('');
+      const [newWeight, setNewWeight] = useState('');
+      const [editingId, setEditingId] = useState(null);
+      const fileInputRef = useRef(null);
+      
+      // State for trendline window configuration
+      const [trendWindow, setTrendWindow] = useState(3);
+      const [predictWeeks, setPredictWeeks] = useState(2);
+
+      const API_URL = '/api/measurements';
+      const PROFILE_URL = '/api/profile';
+
+      const birthDate = profile ? profile.birth_date : undefined;
+
+      useEffect(() => {
+        Promise.all([
+          fetch(API_URL).then(res => res.json()),
+          fetch(PROFILE_URL).then(res => res.json())
+        ])
+          .then(([measurementsData, profileData]) => {
+            if (Array.isArray(measurementsData)) {
+              const formattedData = measurementsData.map(d => ({
+                ...d,
+                date: new Date(d.date).toISOString().split('T')[0]
+              }));
+              setEntries(formattedData);
+            }
+            setProfile(profileData || null);
+          })
+          .catch(err => {
+            console.error("Failed to fetch measurements or profile.", err);
+            setProfile(null);
+          })
+          .finally(() => {
+            setIsLoading(false);
+          });
+      }, []);
+
+      useEffect(() => {
+        if (profile) {
+          document.title = profile.name + "'s Weight Tracker";
+        }
+      }, [profile]);
+
+      const { chartData, xAxisMax, yAxisMax, yAxisMin } = useMemo(() => {
+        if (!birthDate) {
+          return { chartData: [], xAxisMax: 0, yAxisMax: 0, yAxisMin: 0 };
+        }
+
+        const milestones = getMilestones(profile && profile.sex);
+        const birthTimestamp = new Date(birthDate).getTime();
+        const dataPoints = [];
+
+        const sortedEntries = [...entries].sort((a,b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+        
+        const latestEntryTimestamp = sortedEntries.length > 0 
+          ? new Date(sortedEntries[sortedEntries.length - 1].date).getTime()
+          : birthTimestamp;
+          
+        // Extended X-Axis to comfortably fit the dynamically sized projection
+        const bufferDays = 4; // Add a few extra days past the final predicted week
+        const calculatedXAxisMax = latestEntryTimestamp + ((predictWeeks * 7 + bufferDays) * 24 * 60 * 60 * 1000); 
+
+        milestones.forEach((milestone) => {
+          const milestoneDate = new Date(birthTimestamp + milestone.months * 30.44 * 24 * 60 * 60 * 1000);
+          dataPoints.push({
+            timestamp: milestoneDate.getTime(),
+            p2: milestone.p2,
+            p9: milestone.p9,
+            p25: milestone.p25,
+            p50: milestone.p50,
+            p75: milestone.p75,
+            p91: milestone.p91,
+            p98: milestone.p98,
+          });
+        });
+
+        sortedEntries.forEach((entry) => {
+          dataPoints.push({
+            timestamp: new Date(entry.date).getTime(),
+            babyWeight: entry.weight,
+          });
+        });
+
+        // Generate Trendline predictions passing the flexible trendWindow
+        const trend = calculateTrend(sortedEntries, trendWindow);
+        let predictedWeights = [];
+        
+        if (trend) {
+          const { slope, intercept, t0 } = trend;
+          
+          // Plot the trend starting from the exact date of the latest actual entry
+          const lastX = (latestEntryTimestamp - t0) / 86400000;
+          const trendAtLast = slope * lastX + intercept;
+          
+          dataPoints.push({
+            timestamp: latestEntryTimestamp,
+            predictedWeight: Math.round(trendAtLast)
+          });
+          predictedWeights.push(Math.round(trendAtLast));
+
+          // Plot ghost points at 7-day intervals for the selected number of weeks
+          const predictionIntervals = [];
+          for (let i = 1; i <= predictWeeks; i++) {
+            predictionIntervals.push(i * 7);
+          }
+
+          predictionIntervals.forEach(days => {
+            const futureTime = latestEntryTimestamp + days * 86400000;
+            const futureX = (futureTime - t0) / 86400000;
+            const futureWeight = Math.round(slope * futureX + intercept);
+            
+            dataPoints.push({
+              timestamp: futureTime,
+              predictedWeight: futureWeight
+            });
+            predictedWeights.push(futureWeight);
+          });
+        }
+
+        const sortedData = dataPoints
+          .filter(d => !isNaN(d.timestamp))
+          .sort((a, b) => a.timestamp - b.timestamp);
+
+        let prevMilestone = milestones[0];
+        let nextMilestone = milestones[milestones.length - 1];
+
+        for (let i = 0; i < milestones.length; i++) {
+          const mTime = new Date(birthTimestamp + milestones[i].months * 30.44 * 24 * 60 * 60 * 1000).getTime();
+          if (mTime >= calculatedXAxisMax) {
+            nextMilestone = milestones[i];
+            prevMilestone = i > 0 ? milestones[i - 1] : milestones[0];
+            break;
+          }
+        }
+
+        const prevTime = new Date(birthTimestamp + prevMilestone.months * 30.44 * 24 * 60 * 60 * 1000).getTime();
+        const nextTime = new Date(birthTimestamp + nextMilestone.months * 30.44 * 24 * 60 * 60 * 1000).getTime();
+        
+        let interpolatedMaxP98 = nextMilestone.p98;
+        if (nextTime > prevTime) {
+          const fraction = Math.max(0, Math.min(1, (calculatedXAxisMax - prevTime) / (nextTime - prevTime)));
+          interpolatedMaxP98 = prevMilestone.p98 + (nextMilestone.p98 - prevMilestone.p98) * fraction;
+        }
+
+        let calculatedYAxisMax, calculatedYAxisMin;
+        
+        if (sortedEntries.length > 0) {
+          let maxBabyWeight = Math.max(...sortedEntries.map(e => e.weight));
+          let minBabyWeight = Math.min(...sortedEntries.map(e => e.weight));
+          
+          if (predictedWeights.length > 0) {
+            maxBabyWeight = Math.max(maxBabyWeight, ...predictedWeights);
+            minBabyWeight = Math.min(minBabyWeight, ...predictedWeights);
+          }
+          
+          const buffer = 1200; 
+          calculatedYAxisMax = Math.ceil((maxBabyWeight + buffer) / 500) * 500;
+          calculatedYAxisMin = Math.max(0, Math.floor((minBabyWeight - buffer) / 500) * 500);
+        } else {
+          calculatedYAxisMax = Math.ceil(interpolatedMaxP98 / 500) * 500 + 200;
+          calculatedYAxisMin = Math.max(0, Math.floor(milestones[0].p2 / 500) * 500 - 200);
+        }
+
+        return { 
+          chartData: sortedData,
+          xAxisMax: calculatedXAxisMax,
+          yAxisMax: calculatedYAxisMax,
+          yAxisMin: calculatedYAxisMin
+        };
+      }, [entries, birthDate, profile, trendWindow, predictWeeks]);
+
+      const handleAddEntry = async (e) => {
+        e.preventDefault();
+        if (!newDate || !newWeight) return;
+        
+        try {
+          if (editingId) {
+            const res = await fetch(API_URL + '/' + editingId, {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ date: newDate, weight: Number(newWeight) })
+            });
+            const updatedEntry = await res.json();
+            updatedEntry.date = new Date(updatedEntry.date).toISOString().split('T')[0];
+            
+            setEntries(entries.map(entry => entry.id === editingId ? updatedEntry : entry));
+            setEditingId(null);
+          } else {
+            const res = await fetch(API_URL, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ date: newDate, weight: Number(newWeight) })
+            });
+            const newEntry = await res.json();
+            newEntry.date = new Date(newEntry.date).toISOString().split('T')[0];
+
+            setEntries([...entries, newEntry]);
+          }
+          setNewDate('');
+          setNewWeight('');
+        } catch (error) {
+          alert("Failed to save entry. Check the console for errors.");
+          console.error(error);
+        }
+      };
+
+      const handleEdit = (entry) => {
+        setNewDate(entry.date);
+        setNewWeight(entry.weight);
+        setEditingId(entry.id);
+      };
+
+      const handleDelete = async (id) => {
+        try {
+          await fetch(API_URL + '/' + id, { method: 'DELETE' });
+          setEntries(entries.filter(entry => entry.id !== id));
+          if (editingId === id) {
+            setEditingId(null);
+            setNewDate('');
+            setNewWeight('');
+          }
+        } catch (error) {
+          alert("Failed to delete entry.");
+          console.error(error);
+        }
+      };
+
+      const handleExport = () => {
+        const dataToSave = {
+          profile: profile ? { name: profile.name, birth_date: profile.birth_date, sex: profile.sex } : null,
+          entries
+        };
+        const jsonString = JSON.stringify(dataToSave, null, 2);
+        const blob = new Blob([jsonString], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+
+        const slug = (profile && profile.name ? profile.name : '')
+          .trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'child';
+
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = slug + '-weight-data.json';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+      };
+
+      const handleProfileSubmit = async (formValues) => {
+        try {
+          const res = await fetch(PROFILE_URL, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(formValues)
+          });
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            alert(err.error || 'Failed to save profile.');
+            return;
+          }
+          const savedProfile = await res.json();
+          setProfile(savedProfile);
+          setShowProfileModal(false);
+        } catch (error) {
+          alert("Failed to save profile. Check the console for errors.");
+          console.error(error);
+        }
+      };
+
+      const openSettingsModal = () => {
+        if (profile) {
+          setProfileForm({ name: profile.name, birth_date: profile.birth_date, sex: profile.sex });
+        }
+        setShowProfileModal(true);
+      };
+
+      const handleImport = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = async (event) => {
+          try {
+            const importedData = JSON.parse(event.target.result);
+            
+            if (importedData.entries && Array.isArray(importedData.entries)) {
+              setIsLoading(true);
+
+              // Support both the new { profile, entries } shape and the
+              // legacy { birthDate, entries } shape from older exports.
+              // Only apply an imported profile if none exists yet; never
+              // silently overwrite an existing profile.
+              if (!profile) {
+                if (importedData.profile && importedData.profile.name && importedData.profile.birth_date && importedData.profile.sex) {
+                  await handleProfileSubmit(importedData.profile);
+                } else if (importedData.birthDate) {
+                  // Legacy export has no name/sex; leave onboarding to the user.
+                }
+              }
+
+              for (const entry of importedData.entries) {
+                await fetch(API_URL, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ date: entry.date, weight: Number(entry.weight) })
+                });
+              }
+              const res = await fetch(API_URL);
+              const data = await res.json();
+              if (Array.isArray(data)) {
+                const formattedData = data.map(d => ({
+                  ...d,
+                  date: new Date(d.date).toISOString().split('T')[0]
+                }));
+                setEntries(formattedData);
+              }
+              setIsLoading(false);
+              alert("Import successful! Data is now saved to the database.");
+            }
+          } catch (error) {
+            console.error("Import error:", error);
+            alert("Failed to read the file or save to the database.");
+            setIsLoading(false);
+          }
+        };
+        reader.readAsText(file);
+        e.target.value = '';
+      };
+
+      const formatDate = (timestamp) => {
+        if (isNaN(timestamp)) return '';
+        return new Date(timestamp).toLocaleDateString('en-US', { 
+          month: 'short', day: 'numeric', year: 'numeric' 
+        });
+      };
+
+      // Formats a 'YYYY-MM-DD' date-only string without ever converting it
+      // through a local-timezone Date, so the displayed calendar day cannot
+      // shift by one day in negative UTC-offset browsers.
+      const formatDateOnly = (isoDate) => {
+        if (!isoDate) return '';
+        const [y, m, d] = isoDate.split('-').map(Number);
+        return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString('en-US', {
+          month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC'
+        });
+      };
+
+      const formatAxisDate = (timestamp) => {
+        if (isNaN(timestamp)) return '';
+        const date = new Date(timestamp);
+        const day = String(date.getDate()).padStart(2, '0');
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        return day + '/' + month;
+      };
+
+      const formatLbsOz = (grams) => {
+        if (!grams) return '';
+        const totalOunces = grams / 28.34952;
+        let lbs = Math.floor(totalOunces / 16);
+        let oz = Math.round(totalOunces % 16);
+        if (oz === 16) {
+          lbs += 1;
+          oz = 0;
+        }
+        return lbs + "lb " + oz + "oz";
+      };
+
+      const CustomTooltip = ({ active, payload, label }) => {
+        if (active && payload && payload.length) {
+          return (
+            <div className="bg-white p-3 border border-slate-200 shadow-xl rounded-xl text-sm min-w-[160px]">
+              <p className="font-semibold text-slate-700 mb-2 border-b border-slate-100 pb-2">{formatDate(label)}</p>
+              <div className="flex flex-col gap-2">
+                {payload.map((entry, index) => {
+                  const ageInDays = (label - new Date(birthDate).getTime()) / 86400000;
+                  const sex = profile && profile.sex;
+
+                  if (entry.dataKey === 'babyWeight') {
+                    return (
+                      <div key={index} className="flex flex-col mb-1 border-l-2 border-indigo-600 pl-2">
+                        <span className="font-bold text-indigo-600 mb-1">{entry.name}</span>
+                        <span className="text-slate-800 font-medium">{entry.value}g</span>
+                        <span className="text-slate-500 font-medium">{formatLbsOz(entry.value)}</span>
+                        <span className="text-blue-600 font-medium">{getExactCentile(entry.value, ageInDays, sex)} Centile</span>
+                      </div>
+                    );
+                  }
+
+                  if (entry.dataKey === 'predictedWeight') {
+                    return (
+                      <div key={index} className="flex flex-col mb-1 border-l-2 border-orange-500 pl-2">
+                        <span className="font-bold text-orange-500 mb-1">{entry.name}</span>
+                        <span className="text-slate-800 font-medium">{entry.value}g</span>
+                        <span className="text-slate-500 font-medium">{formatLbsOz(entry.value)}</span>
+                        <span className="text-orange-400 font-medium">{getExactCentile(entry.value, ageInDays, sex)} Centile</span>
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div key={index} className="flex justify-between gap-4" style={{ color: entry.color }}>
+                      <span>{entry.name.replace('p', '') + " Centile"}</span>
+                      <span className="font-medium">{entry.value}g</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        }
+        return null;
+      };
+
+      if (isLoading) {
+        return (
+          <div className="w-full min-h-screen flex justify-center items-center text-slate-500 text-sm">
+            Loading...
+          </div>
+        );
+      }
+
+      if (profile === null || showProfileModal) {
+        return (
+          <ProfileModal
+            initialValues={profile ? profileForm : { name: '', birth_date: '', sex: '' }}
+            dismissable={!!profile}
+            onCancel={() => setShowProfileModal(false)}
+            onSubmit={handleProfileSubmit}
+          />
+        );
+      }
+
+      return (
+        <div className="w-full min-h-screen p-4 md:p-8 font-sans flex justify-center items-start text-slate-800">
+          <div className="w-full max-w-4xl bg-white rounded-2xl shadow-sm border border-slate-200 p-6 md:p-8">
+            
+            <div className="flex flex-col md:flex-row md:justify-between md:items-end gap-4 mb-8">
+              <div className="flex items-start gap-3">
+                <div>
+                  <h1 className="text-2xl font-bold tracking-tight">{profile.name}'s Weight Tracker</h1>
+                  <p className="text-slate-500 text-sm mt-1">Track {profile.name}'s growth against standard percentiles</p>
+                </div>
+                <button
+                  onClick={openSettingsModal}
+                  className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors"
+                  title="Edit profile"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+                </button>
+              </div>
+              <div className="flex flex-col md:text-right">
+                <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">
+                  {profile.name}'s Birthdate
+                </label>
+                <div className="text-slate-800 font-medium">
+                  {formatDateOnly(profile.birth_date)}
+                </div>
+              </div>
+            </div>
+
+            {profile.sex === 'male' && (
+              <div className="mb-6 bg-amber-50 border border-amber-200 text-amber-800 text-sm rounded-lg px-4 py-3">
+                Reference centiles shown are WHO girls data. Boys reference data is not yet included.
+              </div>
+            )}
+
+            <div className="h-[400px] w-full mb-6 bg-slate-50/50 rounded-xl p-2 border border-slate-100">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={chartData} margin={{ top: 20, right: 20, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                  
+                  <XAxis 
+                    dataKey="timestamp" 
+                    type="number" 
+                    domain={['dataMin', xAxisMax]} 
+                    allowDataOverflow={true}
+                    tickFormatter={formatAxisDate}
+                    stroke="#94a3b8"
+                    tick={{ fill: '#64748b', fontSize: 12 }}
+                    tickMargin={20}
+                    angle={-90}
+                    textAnchor="end"
+                    height={60}
+                    scale="time"
+                  />
+                  <YAxis 
+                    domain={[yAxisMin, yAxisMax]}
+                    allowDataOverflow={true}
+                    tickFormatter={(val) => val + "g"}
+                    stroke="#94a3b8"
+                    tick={{ fill: '#64748b', fontSize: 12 }}
+                    tickMargin={8}
+                  />
+                  
+                  <Tooltip content={<CustomTooltip />} />
+                  <Legend wrapperStyle={{ paddingTop: '20px' }} iconType="circle" />
+
+                  {/* Standard UK-WHO Centiles */}
+                  <Line name="98th" type="monotone" dataKey="p98" stroke="#cbd5e1" strokeWidth={2} dot={false} connectNulls />
+                  <Line name="91st" type="monotone" dataKey="p91" stroke="#e2e8f0" strokeWidth={2} dot={false} connectNulls />
+                  <Line name="75th" type="monotone" dataKey="p75" stroke="#94a3b8" strokeWidth={2} dot={false} connectNulls />
+                  <Line name="50th" type="monotone" dataKey="p50" stroke="#10b981" strokeWidth={2} strokeDasharray="5 5" dot={false} connectNulls />
+                  <Line name="25th" type="monotone" dataKey="p25" stroke="#94a3b8" strokeWidth={2} dot={false} connectNulls />
+                  <Line name="9th" type="monotone" dataKey="p9" stroke="#e2e8f0" strokeWidth={2} dot={false} connectNulls />
+                  <Line name="2nd" type="monotone" dataKey="p2" stroke="#cbd5e1" strokeWidth={2} dot={false} connectNulls />
+
+                  {/* Prediction Line */}
+                  <Line 
+                    name="Predicted Trend"
+                    type="linear" 
+                    dataKey="predictedWeight" 
+                    stroke="#f97316" 
+                    strokeWidth={2} 
+                    strokeDasharray="5 5"
+                    dot={{ r: 4, strokeWidth: 2, fill: '#fff', stroke: '#f97316' }} 
+                    activeDot={{ r: 6, strokeWidth: 0, fill: '#f97316' }}
+                    connectNulls 
+                  />
+
+                  {/* Actual Weight Line */}
+                  <Line 
+                    name={profile.name + "'s Weight"}
+                    type="monotone" 
+                    dataKey="babyWeight" 
+                    stroke="#6366f1" 
+                    strokeWidth={4} 
+                    dot={{ r: 5, strokeWidth: 2, fill: '#fff' }} 
+                    activeDot={{ r: 7, strokeWidth: 0, fill: '#4f46e5' }}
+                    connectNulls 
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+
+            {/* Dynamic inputs for adjusting the trendline window and projection */}
+            <div className="bg-orange-50/50 p-4 md:p-5 rounded-xl border border-orange-100 mb-10 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+              <div className="flex items-center gap-2">
+                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#f97316" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
+                <div className="text-sm font-bold text-slate-700 uppercase tracking-wide">Growth Prediction Settings</div>
+              </div>
+              <div className="flex flex-wrap gap-3 w-full sm:w-auto">
+                <label className="text-sm font-medium text-slate-600 flex items-center gap-2 bg-white px-3 py-2 rounded-lg border border-orange-200 shadow-sm flex-1 sm:flex-none justify-center">
+                  Based on last
+                  <input 
+                    type="number" 
+                    min="2" 
+                    max="50"
+                    value={trendWindow}
+                    onChange={(e) => setTrendWindow(parseInt(e.target.value) || 2)}
+                    className="w-12 px-1 py-0.5 text-center border border-slate-300 rounded outline-none focus:ring-2 focus:ring-orange-500 bg-slate-50"
+                  />
+                  entries
+                </label>
+                <label className="text-sm font-medium text-slate-600 flex items-center gap-2 bg-white px-3 py-2 rounded-lg border border-orange-200 shadow-sm flex-1 sm:flex-none justify-center">
+                  Project
+                  <input 
+                    type="number" 
+                    min="1" 
+                    max="12"
+                    value={predictWeeks}
+                    onChange={(e) => setPredictWeeks(parseInt(e.target.value) || 1)}
+                    className="w-12 px-1 py-0.5 text-center border border-slate-300 rounded outline-none focus:ring-2 focus:ring-orange-500 bg-slate-50"
+                  />
+                  weeks
+                </label>
+              </div>
+            </div>
+
+            <div className="bg-slate-50 p-5 md:p-6 rounded-xl border border-slate-200">
+              <h2 className="text-sm font-bold text-slate-700 uppercase tracking-wide mb-4">Add New Measurement</h2>
+              <form onSubmit={handleAddEntry} className="flex flex-col sm:flex-row gap-4 items-end">
+                <div className="flex-1 w-full">
+                  <label className="block text-sm font-medium text-slate-600 mb-1.5">Date Measured</label>
+                  <input 
+                    type="date" 
+                    required
+                    value={newDate}
+                    onChange={(e) => setNewDate(e.target.value)}
+                    className="w-full px-4 py-2.5 border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 transition-all bg-white"
+                  />
+                </div>
+                <div className="flex-1 w-full">
+                  <label className="block text-sm font-medium text-slate-600 mb-1.5">Weight (in grams)</label>
+                  <input 
+                    type="number" 
+                    required
+                    min="0"
+                    step="10"
+                    placeholder="e.g. 4500"
+                    value={newWeight}
+                    onChange={(e) => setNewWeight(e.target.value)}
+                    className="w-full px-4 py-2.5 border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 transition-all bg-white"
+                  />
+                </div>
+                <div className="flex gap-2 w-full sm:w-auto">
+                  <button 
+                    type="submit"
+                    className="flex-1 sm:flex-none px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-lg shadow-sm transition-colors focus:ring-4 focus:ring-indigo-500/30 outline-none whitespace-nowrap"
+                  >
+                    {editingId ? 'Update' : 'Log Weight'}
+                  </button>
+                  {editingId && (
+                    <button 
+                      type="button"
+                      onClick={() => {
+                        setEditingId(null);
+                        setNewDate('');
+                        setNewWeight('');
+                      }}
+                      className="flex-1 sm:flex-none px-6 py-2.5 bg-slate-200 hover:bg-slate-300 text-slate-700 font-medium rounded-lg shadow-sm transition-colors outline-none whitespace-nowrap"
+                    >
+                      Cancel
+                    </button>
+                  )}
+                </div>
+              </form>
+            </div>
+
+            <div className="mt-8 bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+              <div className="bg-slate-50 border-b border-slate-200 px-5 py-4 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                <div className="flex items-center gap-3">
+                  <h2 className="text-sm font-bold text-slate-700 uppercase tracking-wide">Measurement History</h2>
+                  <span className="text-xs font-medium text-slate-500 bg-slate-200 px-2 py-1 rounded-full">{entries.length} records</span>
+                  {isLoading && <span className="text-xs text-indigo-500 animate-pulse ml-2">Loading DB...</span>}
+                </div>
+                
+                <div className="flex gap-2 w-full sm:w-auto">
+                  <button 
+                    onClick={handleExport}
+                    className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-3 py-1.5 bg-white border border-slate-300 text-slate-700 text-sm font-medium rounded shadow-sm hover:bg-slate-50 transition-colors"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                    Export JSON
+                  </button>
+                  
+                  <button 
+                    onClick={() => fileInputRef.current?.click()}
+                    className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-3 py-1.5 bg-white border border-slate-300 text-slate-700 text-sm font-medium rounded shadow-sm hover:bg-slate-50 transition-colors"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                    Import JSON
+                  </button>
+                  <input 
+                    type="file" 
+                    accept=".json" 
+                    ref={fileInputRef} 
+                    onChange={handleImport} 
+                    className="hidden" 
+                  />
+                </div>
+              </div>
+              
+              {entries.length === 0 ? (
+                <div className="p-8 text-center text-slate-500 text-sm">No measurements logged yet.</div>
+              ) : (
+                <div className="divide-y divide-slate-100">
+                  {[...entries].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map((entry) => {
+                    const ageInDays = (new Date(entry.date).getTime() - new Date(birthDate).getTime()) / 86400000;
+                    const exactCentile = getExactCentile(entry.weight, ageInDays, profile.sex);
+
+                    return (
+                      <div key={entry.id} className="flex flex-col sm:flex-row justify-between items-start sm:items-center px-5 py-3 hover:bg-slate-50 transition-colors gap-3">
+                        <span className="font-medium text-slate-800 shrink-0">
+                          {new Date(entry.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                        </span>
+                        
+                        <div className="flex flex-wrap gap-2 flex-1 sm:justify-end">
+                          <span className="text-indigo-600 font-semibold bg-indigo-50 px-2 py-0.5 rounded text-sm inline-block w-fit">
+                            {entry.weight}g
+                          </span>
+                          <span className="text-emerald-600 font-semibold bg-emerald-50 px-2 py-0.5 rounded text-sm inline-block w-fit">
+                            {formatLbsOz(entry.weight)}
+                          </span>
+                          <span className="text-blue-600 font-semibold bg-blue-50 px-2 py-0.5 rounded text-sm inline-block w-fit">
+                            {exactCentile} Centile
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
+                          <button 
+                            onClick={() => handleEdit(entry)}
+                            className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors"
+                            title="Edit"
+                          >
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>
+                          </button>
+                          <button 
+                            onClick={() => handleDelete(entry.id)}
+                            className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-md transition-colors"
+                            title="Delete"
+                          >
+                            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+          </div>
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
