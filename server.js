@@ -43,6 +43,28 @@ async function initDb() {
       CONSTRAINT profile_singleton CHECK (id = 1)
     )
   `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS milestones (
+      id SERIAL PRIMARY KEY,
+      date DATE NOT NULL,
+      description TEXT NOT NULL
+    )
+  `);
+}
+
+function validateMilestoneInput(date, description) {
+  const dateMatch = typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date);
+  const isRealDate = dateMatch && !isNaN(new Date(date + 'T00:00:00Z').getTime());
+  if (!isRealDate) {
+    return 'date must be a valid YYYY-MM-DD date';
+  }
+
+  const trimmedDescription = typeof description === 'string' ? description.trim() : '';
+  if (!trimmedDescription || trimmedDescription.length > 200) {
+    return 'description must be between 1 and 200 characters';
+  }
+
+  return null;
 }
 
 // ==========================================
@@ -147,6 +169,68 @@ app.delete('/api/measurements/:id', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Server error deleting measurement' });
+  }
+});
+
+// GET: Fetch all milestones
+app.get('/api/milestones', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM milestones ORDER BY date ASC');
+    res.json(result.rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error fetching milestones' });
+  }
+});
+
+// POST: Add a new milestone
+app.post('/api/milestones', async (req, res) => {
+  const { date, description } = req.body;
+  const validationError = validateMilestoneInput(date, description);
+  if (validationError) {
+    return res.status(400).json({ error: validationError });
+  }
+  try {
+    const result = await pool.query(
+      'INSERT INTO milestones (date, description) VALUES ($1, $2) RETURNING *',
+      [date, description.trim()]
+    );
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error adding milestone' });
+  }
+});
+
+// PUT: Update a milestone
+app.put('/api/milestones/:id', async (req, res) => {
+  const { id } = req.params;
+  const { date, description } = req.body;
+  const validationError = validateMilestoneInput(date, description);
+  if (validationError) {
+    return res.status(400).json({ error: validationError });
+  }
+  try {
+    const result = await pool.query(
+      'UPDATE milestones SET date = $1, description = $2 WHERE id = $3 RETURNING *',
+      [date, description.trim(), id]
+    );
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error updating milestone' });
+  }
+});
+
+// DELETE: Remove a milestone
+app.delete('/api/milestones/:id', async (req, res) => {
+  const { id } = req.params;
+  try {
+    await pool.query('DELETE FROM milestones WHERE id = $1', [id]);
+    res.json({ message: 'Deleted successfully' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error deleting milestone' });
   }
 });
 
