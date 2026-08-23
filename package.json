@@ -1,6 +1,6 @@
 {
 "name": "sprog-log",
-"version": "1.1.0",
+"version": "1.1.1",
 "description": "Baby weight tracker with WHO growth centiles",
 "main": "server.js",
 "scripts": {

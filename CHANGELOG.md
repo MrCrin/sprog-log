@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.1.1]
+
+### Changed
+- **Mobile layout overhaul**: the main container now fills the screen edge-to-edge on mobile (no card background, border, rounded corners, or shadow), with that card styling still applied from `md` breakpoints up. Outer/inner container padding is reduced for a more compact layout on all screen sizes.
+- **Reorganized page structure**: the growth chart is a permanent fixture pinned to the top of the page. Below it, the weight tools (Prediction Settings / Add Measurement / History) and milestone tools (Add Milestone / History) are grouped into a single bordered container with a "Weight" / "Milestones" tab strip attached to its header, so only one group is visible at a time instead of both stacking vertically. These top-level tabs use a flat, underlined style that's visually distinct from the pill-shaped sub-tabs inside each panel.
+- **Chart width and alignment**: on mobile, the chart's card background/border is dropped and its internal margins and Y-axis gutter width are tightened so the plot area lines up with the left/right edges of the heading and tabbed container below it, instead of leaving extra whitespace on either side.
+- **Chart X-axis ticks**: replaced the auto-generated ticks (a mash of irregular calendar dates taken from data points) with explicit month/week ticks — a labeled tick at every whole month of age ("Birth", "1mo", "2mo", ...) plus unlabeled weekly tick marks in between. Month ticks are drawn noticeably longer than week ticks to be visually distinct.
+- **Chart Y-axis**: weight labels now show kilograms (e.g. "4.5kg") instead of grams, to take up less horizontal space.
+- **Header**: renamed from "{Child}'s Weight Tracker" to "{Child}'s Sprog Log" (also updates the browser tab title), and removed the "Track {Child}'s growth against standard percentiles" sub-heading.
+
 ## [1.1.0]
 
 ### Added
