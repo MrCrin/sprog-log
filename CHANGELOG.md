@@ -15,6 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - On mobile, the growth chart now spans the same width as the title and other containers (no extra side padding), and its X-axis ticks are now aligned to calendar months instead of a mash of irregular data-point dates. Month ticks are drawn longer than the in-between week ticks to be visually distinct.
 - Renamed the page header from "{Child}'s Weight Tracker" to "{Child}'s Sprog Log" and removed the "Track {Child}'s growth..." sub-heading.
 - Y-axis weight labels now show kilograms (e.g. "4.5kg") instead of grams, to take up less horizontal space.
+- Tightened the chart's internal margins and Y-axis gutter width so the plot area lines up with the left/right edges of the heading and tabbed container below it on mobile, instead of leaving extra whitespace on both sides.
 
 ## [1.1.0]
 
