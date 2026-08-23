@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.1.1]
+
+### Changed
+- Mobile layout is less cramped: the main container now fills the screen edge-to-edge on mobile (no card background, border, rounded corners, or shadow), with that styling still applied from `md` breakpoints up. Outer and inner padding on mobile is halved.
+
 ## [1.1.0]
 
 ### Added
