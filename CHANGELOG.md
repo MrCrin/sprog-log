@@ -6,16 +6,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-## [1.1.2]
-
-### Changed
-- The growth chart remains a permanent fixture at the top of the page. Below it, the weight tools (Prediction Settings / Add Measurement / History) and milestone tools (Add Milestone / History) are now grouped into a single bordered container with a "Weight" / "Milestones" tab strip attached to its header, so only one group is visible at a time instead of both stacking vertically. These top-level tabs use a flat, underlined style, visually distinct from the pill-shaped sub-tabs inside each panel.
-- Reduced outer and inner container padding further for a more compact layout.
-
 ## [1.1.1]
 
 ### Changed
 - Mobile layout is less cramped: the main container now fills the screen edge-to-edge on mobile (no card background, border, rounded corners, or shadow), with that styling still applied from `md` breakpoints up. Outer and inner padding on mobile is halved.
+- The growth chart remains a permanent fixture at the top of the page. Below it, the weight tools (Prediction Settings / Add Measurement / History) and milestone tools (Add Milestone / History) are now grouped into a single bordered container with a "Weight" / "Milestones" tab strip attached to its header, so only one group is visible at a time instead of both stacking vertically. These top-level tabs use a flat, underlined style, visually distinct from the pill-shaped sub-tabs inside each panel.
+- Reduced outer and inner container padding further for a more compact layout.
+- On mobile, the growth chart now spans the same width as the title and other containers (no extra side padding), and its X-axis ticks are now aligned to calendar months instead of a mash of irregular data-point dates.
 
 ## [1.1.0]
 

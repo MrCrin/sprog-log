@@ -370,9 +370,9 @@
         }
       }, [profile]);
 
-      const { chartData, xAxisMax, yAxisMax, yAxisMin, milestoneMarkers } = useMemo(() => {
+      const { chartData, xAxisMax, yAxisMax, yAxisMin, milestoneMarkers, xAxisTicks, xAxisMonthTicks } = useMemo(() => {
         if (!birthDate) {
-          return { chartData: [], xAxisMax: 0, yAxisMax: 0, yAxisMin: 0, milestoneMarkers: [] };
+          return { chartData: [], xAxisMax: 0, yAxisMax: 0, yAxisMin: 0, milestoneMarkers: [], xAxisTicks: [], xAxisMonthTicks: new Set() };
         }
 
         const percentileMilestones = getMilestones(profile && profile.sex);
@@ -513,12 +513,40 @@
           }))
           .filter((m) => !isNaN(m.timestamp) && m.timestamp >= dataMinTimestamp && m.timestamp <= calculatedXAxisMax);
 
+        // Build explicit X-axis ticks instead of letting recharts derive
+        // them from the (irregularly spaced) data points, which produced a
+        // mash of unevenly spaced calendar dates. A labeled tick is placed
+        // at every whole month of age, with lighter unlabeled tick marks
+        // at every week in between for finer-grained reference. Month tick
+        // timestamps are tracked in a set so the label formatter can match
+        // them exactly, rather than relying on a numeric tolerance that
+        // could also match a nearby week tick.
+        const oneWeekMs = 7 * 24 * 60 * 60 * 1000;
+        const oneMonthMs = 30.4375 * 24 * 60 * 60 * 1000;
+        const totalMonths = Math.max(0, Math.ceil((calculatedXAxisMax - birthTimestamp) / oneMonthMs));
+        const totalWeeks = Math.max(0, Math.ceil((calculatedXAxisMax - birthTimestamp) / oneWeekMs));
+
+        const xAxisMonthTicks = new Set();
+        for (let m = 0; m <= totalMonths; m++) {
+          xAxisMonthTicks.add(birthTimestamp + m * oneMonthMs);
+        }
+        const weekTickTimestamps = [];
+        for (let w = 0; w <= totalWeeks; w++) {
+          weekTickTimestamps.push(birthTimestamp + w * oneWeekMs);
+        }
+
+        const xAxisTicks = Array.from(new Set([...xAxisMonthTicks, ...weekTickTimestamps]))
+          .filter((t) => t <= calculatedXAxisMax)
+          .sort((a, b) => a - b);
+
         return { 
           chartData: sortedData,
           xAxisMax: calculatedXAxisMax,
           yAxisMax: calculatedYAxisMax,
           yAxisMin: calculatedYAxisMin,
-          milestoneMarkers
+          milestoneMarkers,
+          xAxisTicks,
+          xAxisMonthTicks
         };
       }, [entries, birthDate, profile, trendWindow, predictWeeks, milestones]);
 
@@ -769,12 +797,15 @@
         });
       };
 
+      // Labels only the ticks that fall exactly on a whole month of age
+      // (e.g. "1mo", "2mo"); the in-between weekly ticks are rendered as
+      // unlabeled marks so the axis reads as regular month/week ticks
+      // instead of a mash of irregular calendar dates.
       const formatAxisDate = (timestamp) => {
-        if (isNaN(timestamp)) return '';
-        const date = new Date(timestamp);
-        const day = String(date.getDate()).padStart(2, '0');
-        const month = String(date.getMonth() + 1).padStart(2, '0');
-        return day + '/' + month;
+        if (isNaN(timestamp) || !birthDate || !xAxisMonthTicks.has(timestamp)) return '';
+        const oneMonthMs = 30.4375 * 24 * 60 * 60 * 1000;
+        const ageMonths = Math.round((timestamp - new Date(birthDate).getTime()) / oneMonthMs);
+        return ageMonths === 0 ? 'Birth' : ageMonths + 'mo';
       };
 
       const formatLbsOz = (grams) => {
@@ -890,7 +921,7 @@
 
             {/* The growth chart is a permanent fixture and always stays at
                 the top, above the Weight/Milestones tabbed container. */}
-            <div className="relative h-[400px] w-full mb-6 bg-slate-50/50 rounded-xl p-2 border border-slate-100">
+            <div className="relative h-[400px] w-full mb-6 md:bg-slate-50/50 md:rounded-xl p-0 md:p-2 md:border md:border-slate-100">
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={chartData} margin={{ top: 20, right: 20, left: 0, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
@@ -900,13 +931,12 @@
                     type="number" 
                     domain={['dataMin', xAxisMax]} 
                     allowDataOverflow={true}
+                    ticks={xAxisTicks}
                     tickFormatter={formatAxisDate}
                     stroke="#94a3b8"
                     tick={{ fill: '#64748b', fontSize: 12 }}
-                    tickMargin={20}
-                    angle={-90}
-                    textAnchor="end"
-                    height={60}
+                    tickMargin={10}
+                    height={40}
                     scale="time"
                   />
                   <YAxis 
