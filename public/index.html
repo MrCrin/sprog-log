@@ -309,6 +309,11 @@
       const [trendWindow, setTrendWindow] = useState(3);
       const [predictWeeks, setPredictWeeks] = useState(2);
 
+      // Top-level section tabs: Weight (chart + growth tabs) vs Milestones
+      // (milestones tabs), so only one whole section is visible at a time
+      // instead of stacking vertically.
+      const [mainTab, setMainTab] = useState('weight');
+
       // Tabbed containers: growth-tracking tabs (unchanged sections, now
       // switchable) and the new milestones tabs.
       const [growthTab, setGrowthTab] = useState('history');
@@ -850,8 +855,8 @@
       }
 
       return (
-        <div className="w-full min-h-screen p-2 md:p-8 font-sans flex justify-center items-start text-slate-800">
-          <div className="w-full max-w-4xl md:bg-white md:rounded-2xl md:shadow-sm md:border md:border-slate-200 p-3 md:p-8">
+        <div className="w-full min-h-screen p-1 md:p-6 font-sans flex justify-center items-start text-slate-800">
+          <div className="w-full max-w-4xl md:bg-white md:rounded-2xl md:shadow-sm md:border md:border-slate-200 p-2 md:p-6">
             
             <div className="flex flex-col md:flex-row md:justify-between md:items-end gap-4 mb-8">
               <div className="flex items-start gap-3">
@@ -883,7 +888,20 @@
               </div>
             )}
 
-            <div className="relative h-[400px] w-full mb-6 bg-slate-50/50 rounded-xl p-2 border border-slate-100">
+            {/* Top-level section tabs: only one of Weight / Milestones is
+                rendered at a time, instead of stacking both vertically. */}
+            <TabBar
+              tabs={[
+                { key: 'weight', label: 'Weight' },
+                { key: 'milestones', label: 'Milestones' }
+              ]}
+              activeKey={mainTab}
+              onChange={setMainTab}
+            />
+
+            {mainTab === 'weight' && (
+              <React.Fragment>
+            <div className="relative h-[400px] w-full mt-4 mb-6 bg-slate-50/50 rounded-xl p-2 border border-slate-100">
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={chartData} margin={{ top: 20, right: 20, left: 0, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
@@ -1182,9 +1200,13 @@
                 </div>
               )}
             </div>
+              </React.Fragment>
+            )}
 
+            {mainTab === 'milestones' && (
+              <React.Fragment>
             {/* Developmental milestones tabs: add milestone / history */}
-            <div>
+            <div className="mt-4">
               <TabBar
                 tabs={[
                   { key: 'add', label: 'Add Milestone' },
@@ -1287,6 +1309,8 @@
                 </div>
               )}
             </div>
+              </React.Fragment>
+            )}
 
           </div>
         </div>

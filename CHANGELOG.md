@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.1.2]
+
+### Changed
+- The Weight (chart + prediction/add/history tabs) and Milestones (add/history tabs) sections are now grouped behind a top-level "Weight" / "Milestones" tab bar, so only one section is visible at a time instead of both stacking vertically on the page.
+- Reduced outer and inner container padding further for a more compact layout.
+
 ## [1.1.1]
 
 ### Changed
