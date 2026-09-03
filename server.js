@@ -50,9 +50,22 @@ async function initDb() {
       description TEXT NOT NULL
     )
   `);
+  // Added for the milestone details/icon feature. Idempotent so existing
+  // deployments (which already have the milestones table above) pick up
+  // the new columns without a destructive migration. Existing rows
+  // backfill to NULL details and the 'trophy' default icon.
+  await pool.query('ALTER TABLE milestones ADD COLUMN IF NOT EXISTS details TEXT');
+  await pool.query("ALTER TABLE milestones ADD COLUMN IF NOT EXISTS icon TEXT NOT NULL DEFAULT 'trophy'");
 }
 
-function validateMilestoneInput(date, description) {
+// Keep in sync with the MILESTONE_ICONS keys defined in public/index.html.
+const MILESTONE_ICON_KEYS = [
+  'trophy', 'star', 'heart', 'smile', 'foot', 'tooth', 'moon', 'bath',
+  'bottle', 'food', 'crawl', 'walk', 'hand', 'wave', 'sit', 'roll',
+  'speech', 'music', 'book', 'camera', 'sun', 'gift', 'sparkle', 'medal'
+];
+
+function validateMilestoneInput(date, description, details, icon) {
   const dateMatch = typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date);
   const isRealDate = dateMatch && !isNaN(new Date(date + 'T00:00:00Z').getTime());
   if (!isRealDate) {
@@ -64,7 +77,35 @@ function validateMilestoneInput(date, description) {
     return 'description must be between 1 and 200 characters';
   }
 
+  if (details !== undefined && details !== null) {
+    if (typeof details !== 'string') {
+      return 'details must be a string';
+    }
+    if (details.trim().length > 2000) {
+      return 'details must be 2000 characters or fewer';
+    }
+  }
+
+  if (icon !== undefined && icon !== null && icon !== '') {
+    if (typeof icon !== 'string' || !MILESTONE_ICON_KEYS.includes(icon)) {
+      return 'icon is not a recognised icon key';
+    }
+  }
+
   return null;
+}
+
+// Shared shaping for POST/PUT so both endpoints persist the same
+// normalized values: description/details trimmed (empty details -> null),
+// icon defaulted to 'trophy' when absent.
+function normalizeMilestoneInput(body) {
+  const { date, description, details, icon } = body;
+  return {
+    date,
+    description: typeof description === 'string' ? description.trim() : description,
+    details: typeof details === 'string' && details.trim() ? details.trim() : null,
+    icon: icon || 'trophy'
+  };
 }
 
 // ==========================================
@@ -185,15 +226,16 @@ app.get('/api/milestones', async (req, res) => {
 
 // POST: Add a new milestone
 app.post('/api/milestones', async (req, res) => {
-  const { date, description } = req.body;
-  const validationError = validateMilestoneInput(date, description);
+  const { date, description, details, icon } = req.body;
+  const validationError = validateMilestoneInput(date, description, details, icon);
   if (validationError) {
     return res.status(400).json({ error: validationError });
   }
+  const normalized = normalizeMilestoneInput(req.body);
   try {
     const result = await pool.query(
-      'INSERT INTO milestones (date, description) VALUES ($1, $2) RETURNING *',
-      [date, description.trim()]
+      'INSERT INTO milestones (date, description, details, icon) VALUES ($1, $2, $3, $4) RETURNING *',
+      [normalized.date, normalized.description, normalized.details, normalized.icon]
     );
     res.json(result.rows[0]);
   } catch (err) {
@@ -205,15 +247,16 @@ app.post('/api/milestones', async (req, res) => {
 // PUT: Update a milestone
 app.put('/api/milestones/:id', async (req, res) => {
   const { id } = req.params;
-  const { date, description } = req.body;
-  const validationError = validateMilestoneInput(date, description);
+  const { date, description, details, icon } = req.body;
+  const validationError = validateMilestoneInput(date, description, details, icon);
   if (validationError) {
     return res.status(400).json({ error: validationError });
   }
+  const normalized = normalizeMilestoneInput(req.body);
   try {
     const result = await pool.query(
-      'UPDATE milestones SET date = $1, description = $2 WHERE id = $3 RETURNING *',
-      [date, description.trim(), id]
+      'UPDATE milestones SET date = $1, description = $2, details = $3, icon = $4 WHERE id = $5 RETURNING *',
+      [normalized.date, normalized.description, normalized.details, normalized.icon, id]
     );
     res.json(result.rows[0]);
   } catch (err) {
