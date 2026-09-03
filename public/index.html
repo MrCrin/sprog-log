@@ -4,8 +4,35 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Sprog Log</title>
+
+  <!-- Applies the correct light/dark class to <html> before first paint,
+       so there is no flash of the wrong theme. Preference is read from the
+       `theme` cookie (set by the toggle in the app, per-browser so each
+       visitor can have their own setting); falling back to the OS/browser
+       `prefers-color-scheme` when no cookie override exists yet. -->
+  <script>
+    (function () {
+      function getCookie(name) {
+        const match = document.cookie.match('(?:^|; )' + name + '=([^;]*)');
+        return match ? decodeURIComponent(match[1]) : null;
+      }
+      const stored = getCookie('theme'); // 'light' | 'dark' | null (system)
+      const systemPrefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+      const isDark = stored === 'dark' || (stored !== 'light' && systemPrefersDark);
+      document.documentElement.classList.toggle('dark', isDark);
+    })();
+  </script>
+
   <script src="https://cdn.tailwindcss.com"></script>
-  
+  <script>
+    // Use the `dark` class (toggled above / by the in-app toggle) to drive
+    // dark mode instead of only `prefers-color-scheme`, so a locally
+    // overridden preference always wins over the system setting.
+    tailwind.config = {
+      darkMode: 'class',
+    };
+  </script>
+
   <!-- Pinned all dependencies to exact versions to prevent future silent crashes -->
   <script crossorigin src="https://unpkg.com/react@18.2.0/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
@@ -14,7 +41,7 @@
   <script src="https://unpkg.com/@babel/standalone@7.24.4/babel.min.js"></script>
   <script src="https://unpkg.com/recharts@2.1.12/umd/Recharts.js"></script>
 </head>
-<body class="bg-slate-50">
+<body class="bg-slate-50 dark:bg-slate-900 transition-colors duration-150">
   <div id="root"></div>
   <script type="text/babel">
     const { useState, useMemo, useEffect, useRef } = React;
@@ -234,14 +261,14 @@
             aria-haspopup="dialog"
             aria-expanded={open}
             title="Choose icon"
-            className="flex items-center justify-center w-11 h-11 border border-purple-300 rounded-lg bg-white text-purple-600 hover:bg-purple-50 transition-colors focus:ring-2 focus:ring-purple-500 outline-none"
+            className="flex items-center justify-center w-11 h-11 border border-purple-300 dark:border-purple-700 rounded-lg bg-white dark:bg-slate-800 text-purple-600 dark:text-purple-400 hover:bg-purple-50 dark:hover:bg-purple-950/40 transition-colors focus:ring-2 focus:ring-purple-500 outline-none"
           >
             <MilestoneIcon iconKey={value} size={20} />
           </button>
 
           <div
             className={
-              "absolute left-0 z-20 mt-2 w-72 max-w-[calc(100vw-2.5rem)] bg-white border border-slate-200 shadow-xl rounded-xl p-3 origin-top-left transition-all duration-150 ease-out motion-reduce:transition-none " +
+              "absolute left-0 z-20 mt-2 w-72 max-w-[calc(100vw-2.5rem)] bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-xl rounded-xl p-3 origin-top-left transition-all duration-150 ease-out motion-reduce:transition-none " +
               (open ? "opacity-100 scale-100 pointer-events-auto" : "opacity-0 scale-95 pointer-events-none")
             }
             role="dialog"
@@ -262,7 +289,7 @@
                     "flex items-center justify-center w-9 h-9 rounded-lg shrink-0 transition-colors " +
                     (value === icon.key
                       ? "bg-purple-600 text-white"
-                      : "text-purple-600 hover:bg-purple-100")
+                      : "text-purple-600 dark:text-purple-400 hover:bg-purple-100 dark:hover:bg-purple-900/50")
                   }
                 >
                   <MilestoneIcon iconKey={icon.key} size={18} />
@@ -271,6 +298,78 @@
             </div>
           </div>
         </div>
+      );
+    }
+
+    // Reads/writes the `theme` cookie so the light/dark preference is
+    // stored per-browser (each visitor gets their own cookie) rather than
+    // tied to the shared account/profile data. A missing cookie means
+    // "follow the system setting", which is kept live via a
+    // prefers-color-scheme listener so the app follows OS-level changes
+    // until the user explicitly overrides it with the toggle.
+    const THEME_COOKIE = 'theme';
+    const THEME_COOKIE_MAX_AGE = 60 * 60 * 24 * 365; // 1 year
+
+    function readThemeCookie() {
+      const match = document.cookie.match('(?:^|; )' + THEME_COOKIE + '=([^;]*)');
+      return match ? decodeURIComponent(match[1]) : null;
+    }
+
+    function writeThemeCookie(value) {
+      document.cookie = THEME_COOKIE + '=' + encodeURIComponent(value) +
+        '; max-age=' + THEME_COOKIE_MAX_AGE + '; path=/; SameSite=Lax';
+    }
+
+    function useTheme() {
+      const [override, setOverride] = useState(() => readThemeCookie()); // 'light' | 'dark' | null
+      const [systemPrefersDark, setSystemPrefersDark] = useState(
+        () => !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches)
+      );
+
+      useEffect(() => {
+        if (!window.matchMedia) return;
+        const mql = window.matchMedia('(prefers-color-scheme: dark)');
+        const handleChange = (e) => setSystemPrefersDark(e.matches);
+        if (mql.addEventListener) mql.addEventListener('change', handleChange);
+        else mql.addListener(handleChange);
+        return () => {
+          if (mql.removeEventListener) mql.removeEventListener('change', handleChange);
+          else mql.removeListener(handleChange);
+        };
+      }, []);
+
+      const isDark = override ? override === 'dark' : systemPrefersDark;
+
+      useEffect(() => {
+        document.documentElement.classList.toggle('dark', isDark);
+      }, [isDark]);
+
+      const toggleTheme = () => {
+        const next = isDark ? 'light' : 'dark';
+        writeThemeCookie(next);
+        setOverride(next);
+      };
+
+      return { isDark, toggleTheme };
+    }
+
+    // Day/night toggle, fixed to the top-right corner so it's reachable
+    // from every screen (onboarding, loading, and the main app).
+    function ThemeToggle({ isDark, onToggle }) {
+      return (
+        <button
+          type="button"
+          onClick={onToggle}
+          title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+          aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+          className="fixed top-3 right-3 md:top-5 md:right-5 z-50 flex items-center justify-center w-10 h-10 rounded-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-300 shadow-sm hover:bg-slate-50 dark:hover:bg-slate-700 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors"
+        >
+          {isDark ? (
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"></path></svg>
+          ) : (
+            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="4"></circle><line x1="12" y1="2" x2="12" y2="4"></line><line x1="12" y1="20" x2="12" y2="22"></line><line x1="4.93" y1="4.93" x2="6.34" y2="6.34"></line><line x1="17.66" y1="17.66" x2="19.07" y2="19.07"></line><line x1="2" y1="12" x2="4" y2="12"></line><line x1="20" y1="12" x2="22" y2="12"></line><line x1="4.93" y1="19.07" x2="6.34" y2="17.66"></line><line x1="17.66" y1="6.34" x2="19.07" y2="4.93"></line></svg>
+          )}
+        </button>
       );
     }
 
@@ -293,45 +392,48 @@
         }
       };
 
+      const { isDark, toggleTheme } = useTheme();
+
       return (
-        <div className="w-full min-h-screen p-4 md:p-8 font-sans flex justify-center items-center text-slate-800 bg-slate-900/40">
-          <div className="w-full max-w-md bg-white rounded-2xl shadow-xl border border-slate-200 p-6 md:p-8">
+        <div className="w-full min-h-screen p-4 md:p-8 font-sans flex justify-center items-center text-slate-800 dark:text-slate-100 bg-slate-900/40 dark:bg-slate-950/60">
+          <ThemeToggle isDark={isDark} onToggle={toggleTheme} />
+          <div className="w-full max-w-md bg-white dark:bg-slate-800 rounded-2xl shadow-xl border border-slate-200 dark:border-slate-700 p-6 md:p-8">
             <h2 className="text-xl font-bold tracking-tight mb-1">
               {dismissable ? 'Edit Profile' : 'Welcome! Let\'s set up your tracker'}
             </h2>
-            <p className="text-slate-500 text-sm mb-6">
+            <p className="text-slate-500 dark:text-slate-400 text-sm mb-6">
               {dismissable ? 'Update your child\'s details.' : 'Tell us a bit about your child to get started.'}
             </p>
             <form onSubmit={handleSubmit} className="flex flex-col gap-4">
               <div>
-                <label className="block text-sm font-medium text-slate-600 mb-1.5">Child's Name</label>
+                <label className="block text-sm font-medium text-slate-600 dark:text-slate-300 mb-1.5">Child's Name</label>
                 <input
                   type="text"
                   required
                   maxLength={60}
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  className="w-full px-4 py-2.5 border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 transition-all bg-white"
+                  className="w-full px-4 py-2.5 border border-slate-300 dark:border-slate-600 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 transition-all bg-white dark:bg-slate-800"
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-slate-600 mb-1.5">Birth Date</label>
+                <label className="block text-sm font-medium text-slate-600 dark:text-slate-300 mb-1.5">Birth Date</label>
                 <input
                   type="date"
                   required
                   value={birthDate}
                   onChange={(e) => setBirthDate(e.target.value)}
-                  className="w-full px-4 py-2.5 border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 transition-all bg-white"
+                  className="w-full px-4 py-2.5 border border-slate-300 dark:border-slate-600 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 transition-all bg-white dark:bg-slate-800"
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-slate-600 mb-1.5">Sex</label>
+                <label className="block text-sm font-medium text-slate-600 dark:text-slate-300 mb-1.5">Sex</label>
                 <div className="flex gap-4">
-                  <label className="flex items-center gap-2 text-sm font-medium text-slate-600">
+                  <label className="flex items-center gap-2 text-sm font-medium text-slate-600 dark:text-slate-300">
                     <input type="radio" name="sex" value="female" checked={sex === 'female'} onChange={() => setSex('female')} required />
                     Girl
                   </label>
-                  <label className="flex items-center gap-2 text-sm font-medium text-slate-600">
+                  <label className="flex items-center gap-2 text-sm font-medium text-slate-600 dark:text-slate-300">
                     <input type="radio" name="sex" value="male" checked={sex === 'male'} onChange={() => setSex('male')} required />
                     Boy
                   </label>
@@ -349,7 +451,7 @@
                   <button
                     type="button"
                     onClick={onCancel}
-                    className="flex-1 px-6 py-2.5 bg-slate-200 hover:bg-slate-300 text-slate-700 font-medium rounded-lg shadow-sm transition-colors outline-none"
+                    className="flex-1 px-6 py-2.5 bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-300 font-medium rounded-lg shadow-sm transition-colors outline-none"
                   >
                     Cancel
                   </button>
@@ -375,7 +477,7 @@
                 "px-4 py-2 text-sm font-medium rounded-full transition-colors " +
                 (activeKey === tab.key
                   ? "bg-indigo-600 text-white shadow-sm"
-                  : "bg-slate-200 text-slate-700 hover:bg-slate-300")
+                  : "bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-300 dark:hover:bg-slate-600")
               }
             >
               {tab.label}
@@ -437,7 +539,7 @@
     // Custom X-axis tick mark. Month ticks are drawn noticeably longer
     // (and with a labeled month) than the in-between week ticks, so the
     // two tick types are visually distinct at a glance.
-    function XAxisTick({ x, y, isMonthTick, label }) {
+    function XAxisTick({ x, y, isMonthTick, label, isDark }) {
       const tickLength = isMonthTick ? 10 : 4;
       return (
         <g transform={"translate(" + x + "," + y + ")"}>
@@ -446,11 +548,11 @@
             y1={0}
             x2={0}
             y2={tickLength}
-            stroke="#94a3b8"
+            stroke={isDark ? '#64748b' : '#94a3b8'}
             strokeWidth={isMonthTick ? 1.5 : 1}
           />
           {label && (
-            <text x={0} y={tickLength + 12} textAnchor="middle" fontSize={12} fill="#64748b">
+            <text x={0} y={tickLength + 12} textAnchor="middle" fontSize={12} fill={isDark ? '#94a3b8' : '#64748b'}>
               {label}
             </text>
           )}
@@ -472,7 +574,7 @@
       }, []);
 
       return (
-        <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-4 mb-6 min-h-[132px] flex items-center">
+        <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-sm p-4 mb-6 min-h-[132px] flex items-center">
           <div
             className={
               "w-full transition-all duration-150 ease-out motion-reduce:transition-none " +
@@ -523,6 +625,11 @@
       // tooltips. Sticky - keeps showing the last selection instead of
       // clearing when the pointer leaves the chart.
       const [activeDetail, setActiveDetail] = useState(null);
+
+      // Day/night preference: defaults to the system setting, but can be
+      // overridden locally via the toggle (persisted in a `theme` cookie
+      // so each browser/visitor keeps their own choice).
+      const { isDark, toggleTheme } = useTheme();
 
       const API_URL = '/api/measurements';
       const PROFILE_URL = '/api/profile';
@@ -1055,7 +1162,7 @@
       const renderDetailContent = () => {
         if (!activeDetail) {
           return (
-            <p className="text-sm text-slate-400">Hover or tap a point on the chart to see details.</p>
+            <p className="text-sm text-slate-400 dark:text-slate-500">Hover or tap a point on the chart to see details.</p>
           );
         }
 
@@ -1063,15 +1170,15 @@
           const milestone = activeDetail.milestone;
           return (
             <div>
-              <p className="font-semibold text-purple-700 mb-1 flex items-center gap-2">
-                <span className="flex items-center justify-center w-6 h-6 rounded-full bg-purple-100 text-purple-600 shrink-0">
+              <p className="font-semibold text-purple-700 dark:text-purple-400 mb-1 flex items-center gap-2">
+                <span className="flex items-center justify-center w-6 h-6 rounded-full bg-purple-100 dark:bg-purple-900/50 text-purple-600 dark:text-purple-400 shrink-0">
                   <MilestoneIcon iconKey={milestone.icon} size={14} />
                 </span>
                 <span>{formatDateOnly(milestone.date)}</span>
               </p>
-              <p className="text-slate-800 font-medium mb-1">{milestone.description}</p>
+              <p className="text-slate-800 dark:text-slate-100 font-medium mb-1">{milestone.description}</p>
               {milestone.details && (
-                <p className="text-sm text-slate-600 whitespace-pre-wrap">{milestone.details}</p>
+                <p className="text-sm text-slate-600 dark:text-slate-300 whitespace-pre-wrap">{milestone.details}</p>
               )}
             </div>
           );
@@ -1092,28 +1199,28 @@
 
         return (
           <div className="flex flex-col gap-3">
-            <p className="font-semibold text-slate-700">{formatDate(point.timestamp)}</p>
+            <p className="font-semibold text-slate-700 dark:text-slate-300">{formatDate(point.timestamp)}</p>
             <div className="flex flex-wrap gap-4">
               {point.babyWeight != null && (
-                <div className="border-l-2 border-indigo-600 pl-2">
-                  <span className="block font-bold text-indigo-600 text-xs uppercase tracking-wide mb-0.5">{profile.name}'s Weight</span>
-                  <span className="block text-slate-800 font-medium">{point.babyWeight}g &middot; {formatLbsOz(point.babyWeight)}</span>
-                  <span className="block text-blue-600 font-medium text-sm">{getExactCentile(point.babyWeight, ageInDays, sex)} Centile</span>
+                <div className="border-l-2 border-indigo-600 dark:border-indigo-400 pl-2">
+                  <span className="block font-bold text-indigo-600 dark:text-indigo-400 text-xs uppercase tracking-wide mb-0.5">{profile.name}'s Weight</span>
+                  <span className="block text-slate-800 dark:text-slate-100 font-medium">{point.babyWeight}g &middot; {formatLbsOz(point.babyWeight)}</span>
+                  <span className="block text-blue-600 dark:text-blue-400 font-medium text-sm">{getExactCentile(point.babyWeight, ageInDays, sex)} Centile</span>
                 </div>
               )}
               {point.predictedWeight != null && (
                 <div className="border-l-2 border-orange-500 pl-2">
-                  <span className="block font-bold text-orange-500 text-xs uppercase tracking-wide mb-0.5">Predicted Trend</span>
-                  <span className="block text-slate-800 font-medium">{point.predictedWeight}g &middot; {formatLbsOz(point.predictedWeight)}</span>
-                  <span className="block text-orange-500 font-medium text-sm">{getExactCentile(point.predictedWeight, ageInDays, sex)} Centile</span>
+                  <span className="block font-bold text-orange-500 dark:text-orange-400 text-xs uppercase tracking-wide mb-0.5">Predicted Trend</span>
+                  <span className="block text-slate-800 dark:text-slate-100 font-medium">{point.predictedWeight}g &middot; {formatLbsOz(point.predictedWeight)}</span>
+                  <span className="block text-orange-500 dark:text-orange-400 font-medium text-sm">{getExactCentile(point.predictedWeight, ageInDays, sex)} Centile</span>
                 </div>
               )}
             </div>
             {centileRows.length > 0 && (
-              <div className="flex flex-wrap gap-x-4 gap-y-1 pt-2 border-t border-slate-100">
+              <div className="flex flex-wrap gap-x-4 gap-y-1 pt-2 border-t border-slate-100 dark:border-slate-700">
                 {centileRows.map((row) => (
-                  <span key={row.key} className="text-xs text-slate-500">
-                    {row.label} centile: <span className="font-medium text-slate-600">{point[row.key]}g</span>
+                  <span key={row.key} className="text-xs text-slate-500 dark:text-slate-400">
+                    {row.label} centile: <span className="font-medium text-slate-600 dark:text-slate-300">{point[row.key]}g</span>
                   </span>
                 ))}
               </div>
@@ -1124,7 +1231,8 @@
 
       if (isLoading) {
         return (
-          <div className="w-full min-h-screen flex justify-center items-center text-slate-500 text-sm">
+          <div className="w-full min-h-screen flex justify-center items-center text-slate-500 dark:text-slate-400 text-sm">
+            <ThemeToggle isDark={isDark} onToggle={toggleTheme} />
             Loading...
           </div>
         );
@@ -1142,8 +1250,9 @@
       }
 
       return (
-        <div className="w-full min-h-screen p-1 md:p-6 font-sans flex justify-center items-start text-slate-800">
-          <div className="w-full max-w-4xl md:bg-white md:rounded-2xl md:shadow-sm md:border md:border-slate-200 p-2 md:p-6">
+        <div className="w-full min-h-screen p-1 md:p-6 font-sans flex justify-center items-start text-slate-800 dark:text-slate-100">
+          <ThemeToggle isDark={isDark} onToggle={toggleTheme} />
+          <div className="w-full max-w-4xl md:bg-white dark:md:bg-slate-800 md:rounded-2xl md:shadow-sm md:border md:border-slate-200 dark:md:border-slate-700 p-2 md:p-6">
             
             <div className="flex flex-col md:flex-row md:justify-between md:items-end gap-4 mb-8">
               <div className="flex items-start gap-3">
@@ -1152,31 +1261,31 @@
                 </div>
                 <button
                   onClick={openSettingsModal}
-                  className="p-2 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors"
+                  className="p-2 text-slate-400 dark:text-slate-500 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 rounded-md transition-colors"
                   title="Edit profile"
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
                 </button>
               </div>
               <div className="flex flex-col md:text-right">
-                <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">
+                <label className="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider mb-1">
                   {profile.name}'s Birthdate
                 </label>
-                <div className="text-slate-800 font-medium">
+                <div className="text-slate-800 dark:text-slate-100 font-medium">
                   {formatDateOnly(profile.birth_date)}
                 </div>
               </div>
             </div>
 
             {profile.sex === 'male' && (
-              <div className="mb-6 bg-amber-50 border border-amber-200 text-amber-800 text-sm rounded-lg px-4 py-3">
+              <div className="mb-6 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-300 text-sm rounded-lg px-4 py-3">
                 Reference centiles shown are WHO girls data. Boys reference data is not yet included.
               </div>
             )}
 
             {/* The growth chart is a permanent fixture and always stays at
                 the top, above the Weight/Milestones tabbed container. */}
-            <div className="relative h-[400px] w-full mb-4 md:bg-slate-50/50 md:rounded-xl p-0 md:p-2 md:border md:border-slate-100">
+            <div className="relative h-[400px] w-full mb-4 md:bg-slate-50/50 dark:md:bg-slate-800/40 md:rounded-xl p-0 md:p-2 md:border md:border-slate-100 dark:md:border-slate-700">
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart
                   data={chartData}
@@ -1190,7 +1299,7 @@
                     }
                   }}
                 >
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={isDark ? '#334155' : '#e2e8f0'} />
                   
                   <XAxis 
                     dataKey="timestamp" 
@@ -1199,13 +1308,14 @@
                     allowDataOverflow={true}
                     ticks={xAxisTicks}
                     interval={0}
-                    stroke="#94a3b8"
+                    stroke={isDark ? '#64748b' : '#94a3b8'}
                     tickLine={false}
                     tick={(props) => (
                       <XAxisTick
                         {...props}
                         isMonthTick={xAxisMonthTicks.has(props.payload.value)}
                         label={formatAxisDate(props.payload.value)}
+                        isDark={isDark}
                       />
                     )}
                     tickMargin={0}
@@ -1216,8 +1326,8 @@
                     domain={[yAxisMin, yAxisMax]}
                     allowDataOverflow={true}
                     tickFormatter={(val) => (val / 1000) + "kg"}
-                    stroke="#94a3b8"
-                    tick={{ fill: '#64748b', fontSize: 12 }}
+                    stroke={isDark ? '#64748b' : '#94a3b8'}
+                    tick={{ fill: isDark ? '#94a3b8' : '#64748b', fontSize: 12 }}
                     tickMargin={4}
                     width={34}
                   />
@@ -1230,13 +1340,13 @@
                   <Legend wrapperStyle={{ paddingTop: '20px' }} iconType="circle" />
 
                   {/* Standard UK-WHO Centiles */}
-                  <Line name="98th" type="monotone" dataKey="p98" stroke="#cbd5e1" strokeWidth={2} dot={false} connectNulls />
-                  <Line name="91st" type="monotone" dataKey="p91" stroke="#e2e8f0" strokeWidth={2} dot={false} connectNulls />
-                  <Line name="75th" type="monotone" dataKey="p75" stroke="#94a3b8" strokeWidth={2} dot={false} connectNulls />
+                  <Line name="98th" type="monotone" dataKey="p98" stroke={isDark ? '#475569' : '#cbd5e1'} strokeWidth={2} dot={false} connectNulls />
+                  <Line name="91st" type="monotone" dataKey="p91" stroke={isDark ? '#334155' : '#e2e8f0'} strokeWidth={2} dot={false} connectNulls />
+                  <Line name="75th" type="monotone" dataKey="p75" stroke={isDark ? '#64748b' : '#94a3b8'} strokeWidth={2} dot={false} connectNulls />
                   <Line name="50th" type="monotone" dataKey="p50" stroke="#10b981" strokeWidth={2} strokeDasharray="5 5" dot={false} connectNulls />
-                  <Line name="25th" type="monotone" dataKey="p25" stroke="#94a3b8" strokeWidth={2} dot={false} connectNulls />
-                  <Line name="9th" type="monotone" dataKey="p9" stroke="#e2e8f0" strokeWidth={2} dot={false} connectNulls />
-                  <Line name="2nd" type="monotone" dataKey="p2" stroke="#cbd5e1" strokeWidth={2} dot={false} connectNulls />
+                  <Line name="25th" type="monotone" dataKey="p25" stroke={isDark ? '#64748b' : '#94a3b8'} strokeWidth={2} dot={false} connectNulls />
+                  <Line name="9th" type="monotone" dataKey="p9" stroke={isDark ? '#334155' : '#e2e8f0'} strokeWidth={2} dot={false} connectNulls />
+                  <Line name="2nd" type="monotone" dataKey="p2" stroke={isDark ? '#475569' : '#cbd5e1'} strokeWidth={2} dot={false} connectNulls />
 
                   {/* Prediction Line */}
                   <Line 
@@ -1319,8 +1429,8 @@
                 distinct style from the pill-shaped sub-tabs inside each
                 panel (Prediction Settings / Add Measurement / History,
                 etc.), which only switch content within the active panel. */}
-            <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
-              <div className="flex bg-slate-50 border-b border-slate-200">
+            <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-sm overflow-hidden">
+              <div className="flex bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-700">
                 {[
                   { key: 'weight', label: 'Weight' },
                   { key: 'milestones', label: 'Milestones' }
@@ -1332,8 +1442,8 @@
                     className={
                       "px-5 py-3 text-sm font-semibold tracking-wide border-b-2 -mb-px transition-colors " +
                       (mainTab === tab.key
-                        ? "bg-white border-indigo-600 text-indigo-600"
-                        : "border-transparent text-slate-500 hover:text-slate-700 hover:bg-slate-100")
+                        ? "bg-white dark:bg-slate-800 border-indigo-600 dark:border-indigo-400 text-indigo-600 dark:text-indigo-400"
+                        : "border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700")
                     }
                   >
                     {tab.label}
@@ -1356,13 +1466,13 @@
               />
 
               {growthTab === 'prediction' && (
-                <div className="bg-orange-50/50 p-4 md:p-5 rounded-xl border border-orange-100 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                <div className="bg-orange-50/50 dark:bg-orange-950/20 p-4 md:p-5 rounded-xl border border-orange-100 dark:border-orange-800/60 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                   <div className="flex items-center gap-2">
                     <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#f97316" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
-                    <div className="text-sm font-bold text-slate-700 uppercase tracking-wide">Growth Prediction Settings</div>
+                    <div className="text-sm font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wide">Growth Prediction Settings</div>
                   </div>
                   <div className="flex flex-wrap gap-3 w-full sm:w-auto">
-                    <label className="text-sm font-medium text-slate-600 flex items-center gap-2 bg-white px-3 py-2 rounded-lg border border-orange-200 shadow-sm flex-1 sm:flex-none justify-center">
+                    <label className="text-sm font-medium text-slate-600 dark:text-slate-300 flex items-center gap-2 bg-white dark:bg-slate-800 px-3 py-2 rounded-lg border border-orange-200 dark:border-orange-800 shadow-sm flex-1 sm:flex-none justify-center">
                       Based on last
                       <input 
                         type="number" 
@@ -1370,11 +1480,11 @@
                         max="50"
                         value={trendWindow}
                         onChange={(e) => setTrendWindow(parseInt(e.target.value) || 2)}
-                        className="w-12 px-1 py-0.5 text-center border border-slate-300 rounded outline-none focus:ring-2 focus:ring-orange-500 bg-slate-50"
+                        className="w-12 px-1 py-0.5 text-center border border-slate-300 dark:border-slate-600 rounded outline-none focus:ring-2 focus:ring-orange-500 bg-slate-50 dark:bg-slate-800/60"
                       />
                       entries
                     </label>
-                    <label className="text-sm font-medium text-slate-600 flex items-center gap-2 bg-white px-3 py-2 rounded-lg border border-orange-200 shadow-sm flex-1 sm:flex-none justify-center">
+                    <label className="text-sm font-medium text-slate-600 dark:text-slate-300 flex items-center gap-2 bg-white dark:bg-slate-800 px-3 py-2 rounded-lg border border-orange-200 dark:border-orange-800 shadow-sm flex-1 sm:flex-none justify-center">
                       Project
                       <input 
                         type="number" 
@@ -1382,7 +1492,7 @@
                         max="12"
                         value={predictWeeks}
                         onChange={(e) => setPredictWeeks(parseInt(e.target.value) || 1)}
-                        className="w-12 px-1 py-0.5 text-center border border-slate-300 rounded outline-none focus:ring-2 focus:ring-orange-500 bg-slate-50"
+                        className="w-12 px-1 py-0.5 text-center border border-slate-300 dark:border-slate-600 rounded outline-none focus:ring-2 focus:ring-orange-500 bg-slate-50 dark:bg-slate-800/60"
                       />
                       weeks
                     </label>
@@ -1391,21 +1501,21 @@
               )}
 
               {growthTab === 'add' && (
-                <div className="bg-slate-50 p-5 md:p-6 rounded-xl border border-slate-200">
-                  <h2 className="text-sm font-bold text-slate-700 uppercase tracking-wide mb-4">Add New Measurement</h2>
+                <div className="bg-slate-50 dark:bg-slate-800/60 p-5 md:p-6 rounded-xl border border-slate-200 dark:border-slate-700">
+                  <h2 className="text-sm font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wide mb-4">Add New Measurement</h2>
                   <form onSubmit={handleAddEntry} className="flex flex-col sm:flex-row gap-4 items-end">
                     <div className="flex-1 w-full">
-                      <label className="block text-sm font-medium text-slate-600 mb-1.5">Date Measured</label>
+                      <label className="block text-sm font-medium text-slate-600 dark:text-slate-300 mb-1.5">Date Measured</label>
                       <input 
                         type="date" 
                         required
                         value={newDate}
                         onChange={(e) => setNewDate(e.target.value)}
-                        className="w-full px-4 py-2.5 border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 transition-all bg-white"
+                        className="w-full px-4 py-2.5 border border-slate-300 dark:border-slate-600 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 transition-all bg-white dark:bg-slate-800"
                       />
                     </div>
                     <div className="flex-1 w-full">
-                      <label className="block text-sm font-medium text-slate-600 mb-1.5">Weight (in grams)</label>
+                      <label className="block text-sm font-medium text-slate-600 dark:text-slate-300 mb-1.5">Weight (in grams)</label>
                       <input 
                         type="number" 
                         required
@@ -1414,7 +1524,7 @@
                         placeholder="e.g. 4500"
                         value={newWeight}
                         onChange={(e) => setNewWeight(e.target.value)}
-                        className="w-full px-4 py-2.5 border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 transition-all bg-white"
+                        className="w-full px-4 py-2.5 border border-slate-300 dark:border-slate-600 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 transition-all bg-white dark:bg-slate-800"
                       />
                     </div>
                     <div className="flex gap-2 w-full sm:w-auto">
@@ -1432,7 +1542,7 @@
                             setNewDate('');
                             setNewWeight('');
                           }}
-                          className="flex-1 sm:flex-none px-6 py-2.5 bg-slate-200 hover:bg-slate-300 text-slate-700 font-medium rounded-lg shadow-sm transition-colors outline-none whitespace-nowrap"
+                          className="flex-1 sm:flex-none px-6 py-2.5 bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-300 font-medium rounded-lg shadow-sm transition-colors outline-none whitespace-nowrap"
                         >
                           Cancel
                         </button>
@@ -1443,18 +1553,18 @@
               )}
 
               {growthTab === 'history' && (
-                <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
-                  <div className="bg-slate-50 border-b border-slate-200 px-5 py-4 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+                <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl overflow-hidden shadow-sm">
+                  <div className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-700 px-5 py-4 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
                     <div className="flex items-center gap-3">
-                      <h2 className="text-sm font-bold text-slate-700 uppercase tracking-wide">Measurement History</h2>
-                      <span className="text-xs font-medium text-slate-500 bg-slate-200 px-2 py-1 rounded-full">{entries.length} records</span>
-                      {isLoading && <span className="text-xs text-indigo-500 animate-pulse ml-2">Loading DB...</span>}
+                      <h2 className="text-sm font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wide">Measurement History</h2>
+                      <span className="text-xs font-medium text-slate-500 dark:text-slate-400 bg-slate-200 dark:bg-slate-700 px-2 py-1 rounded-full">{entries.length} records</span>
+                      {isLoading && <span className="text-xs text-indigo-500 dark:text-indigo-400 animate-pulse ml-2">Loading DB...</span>}
                     </div>
                     
                     <div className="flex gap-2 w-full sm:w-auto">
                       <button 
                         onClick={handleExport}
-                        className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-3 py-1.5 bg-white border border-slate-300 text-slate-700 text-sm font-medium rounded shadow-sm hover:bg-slate-50 transition-colors"
+                        className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-3 py-1.5 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 text-sm font-medium rounded shadow-sm hover:bg-slate-50 dark:hover:bg-slate-700/60 transition-colors"
                       >
                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
                         Export JSON
@@ -1462,7 +1572,7 @@
                       
                       <button 
                         onClick={() => fileInputRef.current?.click()}
-                        className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-3 py-1.5 bg-white border border-slate-300 text-slate-700 text-sm font-medium rounded shadow-sm hover:bg-slate-50 transition-colors"
+                        className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-3 py-1.5 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 text-sm font-medium rounded shadow-sm hover:bg-slate-50 dark:hover:bg-slate-700/60 transition-colors"
                       >
                         <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
                         Import JSON
@@ -1478,27 +1588,27 @@
                   </div>
                   
                   {entries.length === 0 ? (
-                    <div className="p-8 text-center text-slate-500 text-sm">No measurements logged yet.</div>
+                    <div className="p-8 text-center text-slate-500 dark:text-slate-400 text-sm">No measurements logged yet.</div>
                   ) : (
-                    <div className="divide-y divide-slate-100">
+                    <div className="divide-y divide-slate-100 dark:divide-slate-700">
                       {[...entries].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map((entry) => {
                         const ageInDays = (new Date(entry.date).getTime() - new Date(birthDate).getTime()) / 86400000;
                         const exactCentile = getExactCentile(entry.weight, ageInDays, profile.sex);
 
                         return (
-                          <div key={entry.id} className="flex flex-col sm:flex-row justify-between items-start sm:items-center px-5 py-3 hover:bg-slate-50 transition-colors gap-3">
-                            <span className="font-medium text-slate-800 shrink-0">
+                          <div key={entry.id} className="flex flex-col sm:flex-row justify-between items-start sm:items-center px-5 py-3 hover:bg-slate-50 dark:hover:bg-slate-700/60 transition-colors gap-3">
+                            <span className="font-medium text-slate-800 dark:text-slate-100 shrink-0">
                               {new Date(entry.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
                             </span>
                             
                             <div className="flex flex-wrap gap-2 flex-1 sm:justify-end">
-                              <span className="text-indigo-600 font-semibold bg-indigo-50 px-2 py-0.5 rounded text-sm inline-block w-fit">
+                              <span className="text-indigo-600 dark:text-indigo-400 font-semibold bg-indigo-50 dark:bg-indigo-950/40 px-2 py-0.5 rounded text-sm inline-block w-fit">
                                 {entry.weight}g
                               </span>
-                              <span className="text-emerald-600 font-semibold bg-emerald-50 px-2 py-0.5 rounded text-sm inline-block w-fit">
+                              <span className="text-emerald-600 dark:text-emerald-400 font-semibold bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded text-sm inline-block w-fit">
                                 {formatLbsOz(entry.weight)}
                               </span>
-                              <span className="text-blue-600 font-semibold bg-blue-50 px-2 py-0.5 rounded text-sm inline-block w-fit">
+                              <span className="text-blue-600 dark:text-blue-400 font-semibold bg-blue-50 dark:bg-blue-950/40 px-2 py-0.5 rounded text-sm inline-block w-fit">
                                 {exactCentile} Centile
                               </span>
                             </div>
@@ -1506,14 +1616,14 @@
                             <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
                               <button 
                                 onClick={() => handleEdit(entry)}
-                                className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-md transition-colors"
+                                className="p-1.5 text-slate-400 dark:text-slate-500 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 rounded-md transition-colors"
                                 title="Edit"
                               >
                                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>
                               </button>
                               <button 
                                 onClick={() => handleDelete(entry.id)}
-                                className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-md transition-colors"
+                                className="p-1.5 text-slate-400 dark:text-slate-500 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 rounded-md transition-colors"
                                 title="Delete"
                               >
                                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
@@ -1542,26 +1652,26 @@
               />
 
               {milestoneTab === 'add' && (
-                <div className="bg-purple-50/50 p-5 md:p-6 rounded-xl border border-purple-100">
-                  <h2 className="text-sm font-bold text-slate-700 uppercase tracking-wide mb-4">Add New Milestone</h2>
+                <div className="bg-purple-50/50 dark:bg-purple-950/20 p-5 md:p-6 rounded-xl border border-purple-100 dark:border-purple-800/60">
+                  <h2 className="text-sm font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wide mb-4">Add New Milestone</h2>
                   <form onSubmit={handleMilestoneSubmit} className="flex flex-col gap-4">
                     <div className="flex flex-col sm:flex-row gap-4 sm:items-end">
                       <div className="shrink-0 self-start">
-                        <label className="block text-sm font-medium text-slate-600 mb-1.5">Icon</label>
+                        <label className="block text-sm font-medium text-slate-600 dark:text-slate-300 mb-1.5">Icon</label>
                         <IconPicker value={newMilestoneIcon} onChange={setNewMilestoneIcon} />
                       </div>
                       <div className="w-full sm:w-48 shrink-0">
-                        <label className="block text-sm font-medium text-slate-600 mb-1.5">Date</label>
+                        <label className="block text-sm font-medium text-slate-600 dark:text-slate-300 mb-1.5">Date</label>
                         <input 
                           type="date" 
                           required
                           value={newMilestoneDate}
                           onChange={(e) => setNewMilestoneDate(e.target.value)}
-                          className="w-full px-4 py-2.5 border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-purple-500 transition-all bg-white"
+                          className="w-full px-4 py-2.5 border border-slate-300 dark:border-slate-600 rounded-lg outline-none focus:ring-2 focus:ring-purple-500 transition-all bg-white dark:bg-slate-800"
                         />
                       </div>
                       <div className="flex-1 w-full">
-                        <label className="block text-sm font-medium text-slate-600 mb-1.5">Title</label>
+                        <label className="block text-sm font-medium text-slate-600 dark:text-slate-300 mb-1.5">Title</label>
                         <input 
                           type="text" 
                           required
@@ -1569,15 +1679,15 @@
                           placeholder="e.g. Rolled for the first time."
                           value={newMilestoneDescription}
                           onChange={(e) => setNewMilestoneDescription(e.target.value)}
-                          className="w-full px-4 py-2.5 border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-purple-500 transition-all bg-white"
+                          className="w-full px-4 py-2.5 border border-slate-300 dark:border-slate-600 rounded-lg outline-none focus:ring-2 focus:ring-purple-500 transition-all bg-white dark:bg-slate-800"
                         />
                       </div>
                     </div>
 
                     <div>
                       <div className="flex justify-between items-baseline mb-1.5">
-                        <label className="block text-sm font-medium text-slate-600">Details <span className="text-slate-400 font-normal">(optional)</span></label>
-                        <span className="text-xs text-slate-400">{newMilestoneDetails.length}/2000</span>
+                        <label className="block text-sm font-medium text-slate-600 dark:text-slate-300">Details <span className="text-slate-400 dark:text-slate-500 font-normal">(optional)</span></label>
+                        <span className="text-xs text-slate-400 dark:text-slate-500">{newMilestoneDetails.length}/2000</span>
                       </div>
                       <textarea
                         rows={4}
@@ -1585,7 +1695,7 @@
                         placeholder="What happened? Any extra detail you want to remember."
                         value={newMilestoneDetails}
                         onChange={(e) => setNewMilestoneDetails(e.target.value)}
-                        className="w-full px-4 py-2.5 border border-slate-300 rounded-lg outline-none focus:ring-2 focus:ring-purple-500 transition-all bg-white resize-y"
+                        className="w-full px-4 py-2.5 border border-slate-300 dark:border-slate-600 rounded-lg outline-none focus:ring-2 focus:ring-purple-500 transition-all bg-white dark:bg-slate-800 resize-y"
                       />
                     </div>
 
@@ -1600,7 +1710,7 @@
                         <button 
                           type="button"
                           onClick={handleMilestoneCancelEdit}
-                          className="flex-1 sm:flex-none px-6 py-2.5 bg-slate-200 hover:bg-slate-300 text-slate-700 font-medium rounded-lg shadow-sm transition-colors outline-none whitespace-nowrap"
+                          className="flex-1 sm:flex-none px-6 py-2.5 bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-300 font-medium rounded-lg shadow-sm transition-colors outline-none whitespace-nowrap"
                         >
                           Cancel
                         </button>
@@ -1611,34 +1721,34 @@
               )}
 
               {milestoneTab === 'history' && (
-                <div className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
-                  <div className="bg-slate-50 border-b border-slate-200 px-5 py-4 flex items-center gap-3">
-                    <h2 className="text-sm font-bold text-slate-700 uppercase tracking-wide">Milestone History</h2>
-                    <span className="text-xs font-medium text-slate-500 bg-slate-200 px-2 py-1 rounded-full">{milestones.length} records</span>
+                <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl overflow-hidden shadow-sm">
+                  <div className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-700 px-5 py-4 flex items-center gap-3">
+                    <h2 className="text-sm font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wide">Milestone History</h2>
+                    <span className="text-xs font-medium text-slate-500 dark:text-slate-400 bg-slate-200 dark:bg-slate-700 px-2 py-1 rounded-full">{milestones.length} records</span>
                   </div>
 
                   {milestones.length === 0 ? (
-                    <div className="p-8 text-center text-slate-500 text-sm">No milestones logged yet.</div>
+                    <div className="p-8 text-center text-slate-500 dark:text-slate-400 text-sm">No milestones logged yet.</div>
                   ) : (
-                    <div className="divide-y divide-slate-100">
+                    <div className="divide-y divide-slate-100 dark:divide-slate-700">
                       {[...milestones].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map((milestone) => {
                         const hasDetails = !!(milestone.details && milestone.details.trim());
                         const isExpanded = expandedMilestoneId === milestone.id;
 
                         return (
-                        <div key={milestone.id} className="px-5 py-3 hover:bg-slate-50 transition-colors">
+                        <div key={milestone.id} className="px-5 py-3 hover:bg-slate-50 dark:hover:bg-slate-700/60 transition-colors">
                           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
                             <div className="flex items-center gap-2 shrink-0">
-                              <span className="text-purple-600 shrink-0">
+                              <span className="text-purple-600 dark:text-purple-400 shrink-0">
                                 <MilestoneIcon iconKey={milestone.icon} size={18} />
                               </span>
-                              <span className="font-medium text-slate-800">
+                              <span className="font-medium text-slate-800 dark:text-slate-100">
                                 {new Date(milestone.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
                               </span>
                             </div>
 
                             <div className="flex-1 sm:text-right flex items-center gap-2 justify-end">
-                              <span className="text-purple-700 font-medium bg-purple-50 px-2 py-0.5 rounded text-sm inline-block w-fit">
+                              <span className="text-purple-700 dark:text-purple-400 font-medium bg-purple-50 dark:bg-purple-950/40 px-2 py-0.5 rounded text-sm inline-block w-fit">
                                 {milestone.description}
                               </span>
                               {hasDetails && (
@@ -1647,7 +1757,7 @@
                                   onClick={() => setExpandedMilestoneId(isExpanded ? null : milestone.id)}
                                   aria-expanded={isExpanded}
                                   title={isExpanded ? 'Hide details' : 'Show details'}
-                                  className="p-1 text-slate-400 hover:text-purple-600 hover:bg-purple-50 rounded-md transition-colors"
+                                  className="p-1 text-slate-400 dark:text-slate-500 hover:text-purple-600 dark:hover:text-purple-400 hover:bg-purple-50 dark:hover:bg-purple-950/40 rounded-md transition-colors"
                                 >
                                   <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={"transition-transform duration-200 " + (isExpanded ? "rotate-180" : "")}><polyline points="6 9 12 15 18 9"></polyline></svg>
                                 </button>
@@ -1657,14 +1767,14 @@
                             <div className="flex items-center gap-2 shrink-0 self-end sm:self-auto">
                               <button 
                                 onClick={() => handleMilestoneEdit(milestone)}
-                                className="p-1.5 text-slate-400 hover:text-purple-600 hover:bg-purple-50 rounded-md transition-colors"
+                                className="p-1.5 text-slate-400 dark:text-slate-500 hover:text-purple-600 dark:hover:text-purple-400 hover:bg-purple-50 dark:hover:bg-purple-950/40 rounded-md transition-colors"
                                 title="Edit"
                               >
                                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9"></path><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"></path></svg>
                               </button>
                               <button 
                                 onClick={() => handleMilestoneDelete(milestone.id)}
-                                className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-md transition-colors"
+                                className="p-1.5 text-slate-400 dark:text-slate-500 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 rounded-md transition-colors"
                                 title="Delete"
                               >
                                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
@@ -1681,7 +1791,7 @@
                               style={{ overflow: 'hidden' }}
                             >
                               <div className="min-h-0 sm:pl-6">
-                                <p className="text-sm text-slate-600 whitespace-pre-wrap">{milestone.details}</p>
+                                <p className="text-sm text-slate-600 dark:text-slate-300 whitespace-pre-wrap">{milestone.details}</p>
                               </div>
                             </div>
                           )}
