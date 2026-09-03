@@ -18,6 +18,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Milestone chart markers are now drawn using the milestone's chosen icon instead of a fixed purple star.
 - The selected milestone marker now has a visible active state: its dashed reference line becomes bolder and its icon badge lifts slightly with a thicker ring, so it's clear which milestone is selected on touch devices where there's no hover state.
 
+### Fixed
+- The icon picker popover no longer overflows off the right edge of the screen on mobile: the icon field stays left-aligned instead of being pushed to the end of the row, and the popover's width is clamped to the viewport.
+
 ## [1.1.1]
 
 ### Changed
