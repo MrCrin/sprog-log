@@ -390,11 +390,16 @@
     // already resolved to real pixel coordinates within the chart's SVG, so
     // the marker lines up exactly with the ReferenceLine drawn for the same
     // timestamp. Selecting it (click, hover, or touch) drives the fixed
-    // detail box below the chart instead of a floating tooltip.
-    function MilestoneStar({ cx, cy, milestone, onSelect }) {
+    // detail box below the chart instead of a floating tooltip. When
+    // `isActive` (this milestone is the one currently shown in the detail
+    // box), the marker lifts up slightly and the badge gets a darker/thicker
+    // ring, so it's clear which marker is selected - especially useful on
+    // touch devices with no hover state.
+    function MilestoneStar({ cx, cy, milestone, onSelect, isActive }) {
       if (typeof cx !== 'number' || typeof cy !== 'number') return null;
 
       const select = () => onSelect(milestone);
+      const lift = isActive ? -4 : 0;
 
       return (
         <g
@@ -403,11 +408,27 @@
           onClick={select}
           onTouchStart={select}
         >
-          {/* Larger invisible hit area so the marker is easy to select */}
-          <circle cx={cx} cy={cy} r={12} fill="transparent" />
-          <circle cx={cx} cy={cy} r={9} fill="#a855f7" stroke="#7e22ce" strokeWidth={1} />
-          <g transform={"translate(" + (cx - 6) + "," + (cy - 6) + ")"} color="#ffffff">
-            <MilestoneIcon iconKey={milestone.icon} size={12} />
+          {/* Larger invisible hit area so the marker is easy to select. Kept
+              at the un-lifted position so the tap target doesn't drift. */}
+          <circle cx={cx} cy={cy} r={14} fill="transparent" />
+          <g
+            style={{
+              transform: 'translateY(' + lift + 'px)',
+              transition: 'transform 150ms ease-out',
+            }}
+          >
+            <circle
+              cx={cx}
+              cy={cy}
+              r={isActive ? 10 : 9}
+              fill="#a855f7"
+              stroke="#7e22ce"
+              strokeWidth={isActive ? 2.5 : 1}
+              style={{ transition: 'r 150ms ease-out, stroke-width 150ms ease-out' }}
+            />
+            <g transform={"translate(" + (cx - 6) + "," + (cy - 6) + ")"} color="#ffffff">
+              <MilestoneIcon iconKey={milestone.icon} size={12} />
+            </g>
           </g>
         </g>
       );
@@ -1246,31 +1267,39 @@
                       milestone's date, with an icon marker at the top of the
                       plot area. Selecting the marker (hover, click, or
                       touch) drives the fixed detail box below the chart. */}
-                  {milestoneMarkers.map((milestone) => (
-                    <ReferenceLine
-                      key={'milestone-line-' + milestone.id}
-                      x={milestone.timestamp}
-                      stroke="#a855f7"
-                      strokeDasharray="4 4"
-                      strokeWidth={1.5}
-                    />
-                  ))}
-                  {milestoneMarkers.map((milestone) => (
-                    <ReferenceDot
-                      key={'milestone-star-' + milestone.id}
-                      x={milestone.timestamp}
-                      y={yAxisMax}
-                      r={0}
-                      isFront={true}
-                      shape={(shapeProps) => (
-                        <MilestoneStar
-                          {...shapeProps}
-                          milestone={milestone}
-                          onSelect={(m) => setActiveDetail({ kind: 'milestone', milestone: m })}
-                        />
-                      )}
-                    />
-                  ))}
+                  {milestoneMarkers.map((milestone) => {
+                    const isActive = activeDetail && activeDetail.kind === 'milestone' && activeDetail.milestone.id === milestone.id;
+                    return (
+                      <ReferenceLine
+                        key={'milestone-line-' + milestone.id}
+                        x={milestone.timestamp}
+                        stroke="#a855f7"
+                        strokeDasharray="4 4"
+                        strokeWidth={isActive ? 3 : 1.5}
+                        style={{ transition: 'stroke-width 150ms ease-out' }}
+                      />
+                    );
+                  })}
+                  {milestoneMarkers.map((milestone) => {
+                    const isActive = activeDetail && activeDetail.kind === 'milestone' && activeDetail.milestone.id === milestone.id;
+                    return (
+                      <ReferenceDot
+                        key={'milestone-star-' + milestone.id}
+                        x={milestone.timestamp}
+                        y={yAxisMax}
+                        r={0}
+                        isFront={true}
+                        shape={(shapeProps) => (
+                          <MilestoneStar
+                            {...shapeProps}
+                            milestone={milestone}
+                            isActive={isActive}
+                            onSelect={(m) => setActiveDetail({ kind: 'milestone', milestone: m })}
+                          />
+                        )}
+                      />
+                    );
+                  })}
                 </LineChart>
               </ResponsiveContainer>
             </div>

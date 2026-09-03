@@ -16,6 +16,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Replaced the floating hover tooltips (for both weight points and milestone markers) with a single fixed detail box under the growth chart. Hovering or tapping a weight point or a milestone marker updates the box's contents with a fast, smooth cross-fade instead of showing a tooltip that follows the cursor; the box keeps showing the last selection instead of clearing when the pointer leaves the chart, and starts out showing the most recent weight entry.
 - The weight detail box shows the measured/predicted weight with lb/oz and exact centile, plus the reference centile weights (2nd-98th) for that date, all in one place.
 - Milestone chart markers are now drawn using the milestone's chosen icon instead of a fixed purple star.
+- The selected milestone marker now has a visible active state: its dashed reference line becomes bolder and its icon badge lifts slightly with a thicker ring, so it's clear which milestone is selected on touch devices where there's no hover state.
 
 ## [1.1.1]
 
