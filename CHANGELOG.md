@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [1.2.0]
+
+### Added
+- Milestones now support optional long-form `details` text (up to 2000 characters) in addition to the short title (`description`), for recording extra context about what happened. Shown in Milestone History behind an expand/collapse toggle so the list stays scannable.
+- Selectable milestone icons: a curated set of ~24 inline icons (trophy, star, heart, smile, footprints, tooth, moon, bath, feeding bottle, food, crawling, walking, hand, waving, sitting, rolling, speech, music, book, camera, sun, gift, sparkle, medal). The "Add/Edit Milestone" form now has a clickable icon button (default trophy) that opens a picker grid; the chosen icon is used both in the chart marker and the History list, falling back to trophy for any milestone saved before this feature.
+
+### Changed
+- Replaced the floating hover tooltips (for both weight points and milestone markers) with a single fixed detail box under the growth chart. Hovering or tapping a weight point or a milestone marker updates the box's contents with a fast, smooth cross-fade instead of showing a tooltip that follows the cursor; the box keeps showing the last selection instead of clearing when the pointer leaves the chart, and starts out showing the most recent weight entry.
+- The weight detail box shows the measured/predicted weight with lb/oz and exact centile, plus the reference centile weights (2nd-98th) for that date, all in one place.
+- Milestone chart markers are now drawn using the milestone's chosen icon instead of a fixed purple star.
+
 ## [1.1.1]
 
 ### Changed
