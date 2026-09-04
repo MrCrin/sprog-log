@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+- PIN access gate to keep a deployment private without user accounts. The frontend and all `/api/*` data endpoints are locked until a session is unlocked. On first run (or when an existing deployment upgrades to this version with no PIN configured), the app starts in *setup mode* and the first visitor creates a PIN, stored in Postgres as an `scrypt` hash in a new `app_settings` table. Unlocking sets a signed `httpOnly` cookie that keeps the device unlocked for 30 days. An optional `APP_PIN` env var overrides the stored PIN for recovery, and changing the effective PIN invalidates existing sessions. Failed unlock attempts are rate-limited per IP (5 failures = 15-minute lockout).
+
 ## [1.2.0]
 
 ### Added

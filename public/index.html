@@ -463,6 +463,104 @@
       );
     }
 
+    // fetch wrapper that rejects non-ok responses with the HTTP status and
+    // parsed body attached, so callers can react to 401s (locked / session
+    // expired) and surface server error messages.
+    async function fetchJson(url, options) {
+      const res = await fetch(url, options);
+      if (!res.ok) {
+        const err = new Error('Request failed with status ' + res.status);
+        err.status = res.status;
+        try {
+          err.body = await res.json();
+        } catch (e) {
+          err.body = null;
+        }
+        throw err;
+      }
+      return res.json();
+    }
+
+    // Full-screen PIN gate shown instead of the tracker: first-run setup
+    // (confirm=true) and day-to-day unlocking. Styling mirrors
+    // ProfileModal; actual enforcement is server-side.
+    function PinScreen({ title, subtitle, submitLabel, confirm, onSubmit }) {
+      const [pin, setPin] = useState('');
+      const [confirmPin, setConfirmPin] = useState('');
+      const [error, setError] = useState(null);
+      const [submitting, setSubmitting] = useState(false);
+      const { isDark, toggleTheme } = useTheme();
+
+      const handleSubmit = async (e) => {
+        e.preventDefault();
+        if (confirm && pin !== confirmPin) {
+          setError('PINs do not match');
+          return;
+        }
+        setSubmitting(true);
+        setError(null);
+        try {
+          await onSubmit(pin);
+        } catch (err) {
+          setError((err && err.body && err.body.error) || 'Something went wrong');
+          setSubmitting(false);
+        }
+      };
+
+      return (
+        <div className="w-full min-h-screen p-4 md:p-8 font-sans flex justify-center items-center text-slate-800 dark:text-slate-100 bg-slate-900/40 dark:bg-slate-950/60">
+          <ThemeToggle isDark={isDark} onToggle={toggleTheme} />
+          <div className="w-full max-w-md bg-white dark:bg-slate-800 rounded-2xl shadow-xl border border-slate-200 dark:border-slate-700 p-6 md:p-8">
+            <h2 className="text-xl font-bold tracking-tight mb-1">{title}</h2>
+            <p className="text-slate-500 dark:text-slate-400 text-sm mb-6">{subtitle}</p>
+            <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-600 dark:text-slate-300 mb-1.5">PIN</label>
+                <input
+                  type="password"
+                  required
+                  minLength={4}
+                  maxLength={64}
+                  autoFocus
+                  autoComplete="off"
+                  value={pin}
+                  onChange={(e) => setPin(e.target.value)}
+                  className="w-full px-4 py-2.5 border border-slate-300 dark:border-slate-600 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 transition-all bg-white dark:bg-slate-800"
+                />
+              </div>
+              {confirm && (
+                <div>
+                  <label className="block text-sm font-medium text-slate-600 dark:text-slate-300 mb-1.5">Confirm PIN</label>
+                  <input
+                    type="password"
+                    required
+                    minLength={4}
+                    maxLength={64}
+                    autoComplete="off"
+                    value={confirmPin}
+                    onChange={(e) => setConfirmPin(e.target.value)}
+                    className="w-full px-4 py-2.5 border border-slate-300 dark:border-slate-600 rounded-lg outline-none focus:ring-2 focus:ring-indigo-500 transition-all bg-white dark:bg-slate-800"
+                  />
+                </div>
+              )}
+              {error && (
+                <div className="text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-lg px-3 py-2">
+                  {error}
+                </div>
+              )}
+              <button
+                type="submit"
+                disabled={submitting}
+                className="flex-1 px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-lg shadow-sm transition-colors focus:ring-4 focus:ring-indigo-500/30 outline-none disabled:opacity-60"
+              >
+                {submitLabel}
+              </button>
+            </form>
+          </div>
+        </div>
+      );
+    }
+
     // Simple pill-style tab bar, reused for the growth tabs and the
     // milestones tabs. `tabs` is an array of { key, label }.
     function TabBar({ tabs, activeKey, onChange }) {
@@ -591,6 +689,9 @@
       const [entries, setEntries] = useState([]);
       const [profile, setProfile] = useState(undefined); // undefined = not yet loaded, null = needs onboarding
       const [isLoading, setIsLoading] = useState(true);
+      // PIN gate state: 'loading' while checking with the server, then
+      // 'setup' (no PIN configured yet), 'locked' or 'unlocked'.
+      const [authStatus, setAuthStatus] = useState('loading');
       const [showProfileModal, setShowProfileModal] = useState(false);
       const [profileForm, setProfileForm] = useState({ name: '', birth_date: '', sex: '' });
       const [newDate, setNewDate] = useState('');
@@ -637,11 +738,21 @@
 
       const birthDate = profile ? profile.birth_date : undefined;
 
+      // Ask the server which screen to show before loading any data. This
+      // runs once on mount; the data effect below only fires once unlocked.
       useEffect(() => {
+        fetchJson('/api/auth')
+          .then(data => setAuthStatus(data.status || 'locked'))
+          .catch(() => setAuthStatus('locked'));
+      }, []);
+
+      useEffect(() => {
+        if (authStatus !== 'unlocked') return;
+        setIsLoading(true);
         Promise.all([
-          fetch(API_URL).then(res => res.json()),
-          fetch(PROFILE_URL).then(res => res.json()),
-          fetch(MILESTONES_URL).then(res => res.json())
+          fetchJson(API_URL),
+          fetchJson(PROFILE_URL),
+          fetchJson(MILESTONES_URL)
         ])
           .then(([measurementsData, profileData, milestonesData]) => {
             if (Array.isArray(measurementsData)) {
@@ -662,12 +773,29 @@
           })
           .catch(err => {
             console.error("Failed to fetch measurements, profile, or milestones.", err);
+            if (err && err.status === 401) {
+              // Session expired or PIN changed - back to the PIN screen.
+              setAuthStatus('locked');
+              return;
+            }
             setProfile(null);
           })
           .finally(() => {
             setIsLoading(false);
           });
-      }, []);
+      }, [authStatus]);
+
+      const handleCreatePin = (pin) => fetchJson('/api/setup/pin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pin })
+      }).then(() => setAuthStatus('unlocked'));
+
+      const handleUnlock = (pin) => fetchJson('/api/unlock', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pin })
+      }).then(() => setAuthStatus('unlocked'));
 
       useEffect(() => {
         if (profile) {
@@ -1228,6 +1356,40 @@
           </div>
         );
       };
+
+      // PIN gate: shown before any tracker UI or data. 'loading' means the
+      // auth status check is still in flight.
+      if (authStatus === 'loading') {
+        return (
+          <div className="w-full min-h-screen flex justify-center items-center text-slate-500 dark:text-slate-400 text-sm">
+            <ThemeToggle isDark={isDark} onToggle={toggleTheme} />
+            Loading...
+          </div>
+        );
+      }
+
+      if (authStatus === 'setup') {
+        return (
+          <PinScreen
+            title="Welcome! Set up your PIN"
+            subtitle="Choose a PIN (at least 4 characters) to protect this log. Anyone with the PIN can view and edit it, so keep it to yourselves."
+            submitLabel="Save PIN"
+            confirm
+            onSubmit={handleCreatePin}
+          />
+        );
+      }
+
+      if (authStatus === 'locked') {
+        return (
+          <PinScreen
+            title="Enter your PIN"
+            subtitle="This log is PIN protected."
+            submitLabel="Unlock"
+            onSubmit={handleUnlock}
+          />
+        );
+      }
 
       if (isLoading) {
         return (
