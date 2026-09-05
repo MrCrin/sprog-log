@@ -478,7 +478,10 @@
         }
         throw err;
       }
-      return res.json();
+      // Some endpoints (e.g. a successful unlock) may return an empty
+      // body; tolerate that instead of failing to parse JSON.
+      const text = await res.text();
+      return text ? JSON.parse(text) : null;
     }
 
     // Full-screen PIN gate shown instead of the tracker: first-run setup
