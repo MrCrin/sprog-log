@@ -325,7 +325,7 @@ app.post('/api/unlock', async (req, res) => {
     if (verifyPin(pin, record)) {
       unlockAttempts.delete(req.ip);
       sendSessionCookie(req, res, signingKeyFor(record));
-      return res.status(204).end();
+      return res.json({ status: 'unlocked' });
     }
     recordFailedUnlock(req.ip);
     const newLockout = getActiveLockout(req.ip);
