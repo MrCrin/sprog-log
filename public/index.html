@@ -688,6 +688,258 @@
       );
     }
 
+    // Shared settings and portable backups. Imports are validated by the server
+    // before the user is asked to replace any data, and validated again on import.
+    function SettingsView({ onEditProfile }) {
+      const [dayStart, setDayStart] = useState('');
+      const [busy, setBusy] = useState(false);
+      const [error, setError] = useState('');
+      const [notice, setNotice] = useState('');
+      const [pendingImport, setPendingImport] = useState(null);
+      const [importSections, setImportSections] = useState([]);
+      const sections = [
+        ['profile', 'Profile'], ['weight', 'Weight'], ['milestones', 'Milestones'],
+        ['sleep', 'Sleep'], ['settings', 'Settings']
+      ];
+      const messageFor = (err) => (err && err.body && err.body.error) || (err && err.message) || 'Something went wrong.';
+
+      useEffect(() => {
+        fetchJson('/api/sleep').then(data => setDayStart(data.day_start))
+          .catch(err => setError('Could not load settings: ' + messageFor(err)));
+      }, []);
+
+      const saveDayStart = async (e) => {
+        e.preventDefault();
+        if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(dayStart)) {
+          setError('Enter a valid day start time.');
+          return;
+        }
+        setBusy(true); setError(''); setNotice('');
+        try {
+          await fetchJson('/api/sleep/day-start', {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ day_start: dayStart })
+          });
+          setNotice('Day start saved.');
+        } catch (err) { setError(messageFor(err)); }
+        finally { setBusy(false); }
+      };
+
+      const exportBackup = async (section) => {
+        setBusy(true); setError(''); setNotice('');
+        try {
+          const data = await fetchJson('/api/backup' + (section ? '?sections=' + encodeURIComponent(section) : ''));
+          const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = 'sprog-log-' + (section || 'all') + '-' + new Date().toISOString().slice(0, 10) + '.json';
+          document.body.appendChild(link); link.click(); link.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 1000);
+        } catch (err) { setError('Export failed: ' + messageFor(err)); }
+        finally { setBusy(false); }
+      };
+
+      const chooseImport = async (e) => {
+        const file = e.target.files && e.target.files[0];
+        e.target.value = '';
+        if (!file) return;
+        setPendingImport(null); setImportSections([]); setError(''); setNotice(''); setBusy(true);
+        try {
+          let data;
+          try { data = JSON.parse(await file.text()); }
+          catch (_) { throw new Error('Choose a valid JSON backup file.'); }
+          const result = await fetchJson('/api/backup/validate', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
+          });
+          setPendingImport(data);
+          setImportSections(result.sections || []);
+        } catch (err) { setError('Import validation failed: ' + messageFor(err)); }
+        finally { setBusy(false); }
+      };
+
+      const confirmImport = async () => {
+        if (!pendingImport) return;
+        setBusy(true); setError('');
+        try {
+          await fetchJson('/api/backup/import', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(pendingImport)
+          });
+          window.location.reload();
+        } catch (err) { setError('Import failed: ' + messageFor(err)); setBusy(false); }
+      };
+
+      return (
+        <section className="space-y-5" aria-label="Settings">
+          <h2 className="text-xl font-bold">Settings</h2>
+          {error && <p role="alert" className="text-sm text-red-700 dark:text-red-400 bg-red-50 dark:bg-red-950/40 rounded-lg p-3">{error}</p>}
+          {notice && <p role="status" className="text-sm text-green-700 dark:text-green-400">{notice}</p>}
+          <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-5">
+            <h3 className="font-semibold mb-3">Profile</h3>
+            <button type="button" onClick={onEditProfile} className="px-4 py-2 rounded-lg bg-slate-200 dark:bg-slate-700">Edit profile</button>
+          </div>
+          <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-5">
+            <h3 className="font-semibold mb-1">Sleep day start</h3>
+            <p className="text-sm text-slate-500 dark:text-slate-400 mb-3">Shared by everyone. Sleep days use this time in each device's local time zone.</p>
+            <form onSubmit={saveDayStart} className="flex flex-wrap items-end gap-3">
+              <label className="text-sm font-medium">Day start
+                <input type="time" required value={dayStart} onChange={e => setDayStart(e.target.value)} className="block mt-1 px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-800" />
+              </label>
+              <button type="submit" disabled={busy || !dayStart} className="px-4 py-2 rounded-lg bg-indigo-600 text-white disabled:opacity-50">Save</button>
+            </form>
+          </div>
+          <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-5">
+            <h3 className="font-semibold mb-1">Export data</h3>
+            <p className="text-sm text-slate-500 dark:text-slate-400 mb-3">Download JSON backups for all data or individual sections. Active sleep, PINs and theme preferences are excluded.</p>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" disabled={busy} onClick={() => exportBackup(null)} className="px-4 py-2 rounded-lg bg-indigo-600 text-white disabled:opacity-50">Export all</button>
+              {sections.map(([key, label]) => <button key={key} type="button" disabled={busy} onClick={() => exportBackup(key)} className="px-4 py-2 rounded-lg bg-slate-200 dark:bg-slate-700 disabled:opacity-50">Export {label}</button>)}
+            </div>
+          </div>
+          <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-5">
+            <h3 className="font-semibold mb-1">Import data</h3>
+            <p className="text-sm text-slate-500 dark:text-slate-400 mb-3">Select a backup to validate it. Import replaces the sections present in the file; other sections are unchanged.</p>
+            <input type="file" accept=".json,application/json" onChange={chooseImport} className="block w-full text-sm" disabled={busy} aria-label="Choose backup file" />
+            {pendingImport && <div className="mt-4 rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950/30 p-4">
+              <p className="text-sm font-medium">Validated backup. Replace {importSections.length ? importSections.join(', ') : 'the sections in this backup'}? This cannot be undone.</p>
+              <div className="flex gap-2 mt-3">
+                <button type="button" disabled={busy} onClick={confirmImport} className="px-4 py-2 rounded-lg bg-red-700 text-white disabled:opacity-50">Confirm import</button>
+                <button type="button" disabled={busy} onClick={() => { setPendingImport(null); setImportSections([]); }} className="px-4 py-2 rounded-lg bg-slate-200 dark:bg-slate-700 disabled:opacity-50">Cancel</button>
+              </div>
+            </div>}
+          </div>
+        </section>
+      );
+    }
+
+    // Sleep days use local calendar boundaries, not fixed 24-hour offsets: a
+    // daylight-saving transition may make a day 23 or 25 hours long.
+    function sleepDayBoundary(date, dayStart, offset = 0) {
+      const [hours, minutes] = dayStart.split(':').map(Number);
+      return new Date(date.getFullYear(), date.getMonth(), date.getDate() + offset, hours, minutes);
+    }
+    function sleepDaySegments(records, from, to, now) {
+      return records.map(record => {
+        const startTime = +new Date(record.start_time);
+        const endTime = record.end_time ? +new Date(record.end_time) : now;
+        const a = Math.max(+from, startTime), b = Math.min(+to, endTime);
+        return b > a ? { record, a, b } : null;
+      }).filter(Boolean);
+    }
+    function sleepDuration(ms) {
+      const minutes = Math.max(0, Math.floor(ms / 60000));
+      return Math.floor(minutes / 60) + 'h ' + (minutes % 60) + 'm';
+    }
+    function sleepLocalInput(value) {
+      const d = new Date(value);
+      const pad = n => String(n).padStart(2, '0');
+      return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+    }
+
+    function SleepView() {
+      const [data, setData] = useState(null);
+      const [error, setError] = useState('');
+      const [busy, setBusy] = useState(false);
+      const [now, setNow] = useState(Date.now());
+      const [days, setDays] = useState(14);
+      const [editing, setEditing] = useState(null);
+      const [start, setStart] = useState('');
+      const [end, setEnd] = useState('');
+      const [showForm, setShowForm] = useState(false);
+      const refresh = async () => {
+        try {
+          const result = await fetchJson('/api/sleep');
+          setData(result);
+          setError('');
+        } catch (err) {
+          setError((err.body && err.body.error) || 'Could not refresh sleep data. Please try again.');
+        }
+      };
+      useEffect(() => {
+        refresh();
+        const timer = setInterval(() => { setNow(Date.now()); refresh(); }, 60000);
+        const focus = () => { setNow(Date.now()); refresh(); };
+        window.addEventListener('focus', focus);
+        return () => { clearInterval(timer); window.removeEventListener('focus', focus); };
+      }, []);
+      const mutate = async (url, method, body) => {
+        setBusy(true);
+        setError('');
+        try {
+          await fetchJson(url, { method, headers: { 'Content-Type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}) });
+          await refresh();
+          return true;
+        } catch (err) {
+          // Re-read authoritative state after conflicts while retaining the error.
+          if (err.status === 409) {
+            try { setData(await fetchJson('/api/sleep')); } catch (_) {}
+          }
+          setError((err.body && err.body.error) || 'Could not save sleep data. Please try again.');
+          return false;
+        } finally { setBusy(false); }
+      };
+      const submit = async e => {
+        e.preventDefault();
+        const from = new Date(start), to = new Date(end);
+        if (!start || !end || !Number.isFinite(+from) || !Number.isFinite(+to) || to <= from || to > new Date()) {
+          setError('Enter valid start and end times, with the end after the start and not in the future.');
+          return;
+        }
+        if (await mutate('/api/sleep' + (editing !== null ? '/' + editing.id : ''), editing !== null ? 'PUT' : 'POST', { start_time: from.toISOString(), end_time: to.toISOString(), ...(editing ? { expected_start_time: editing.start_time, expected_end_time: editing.end_time } : {}) })) {
+          setShowForm(false); setEditing(null); setStart(''); setEnd('');
+        }
+      };
+      const records = data ? [...data.entries, ...(data.active ? [data.active] : [])] : [];
+      const dayStart = data && data.day_start || '07:00';
+      let currentBoundary = sleepDayBoundary(new Date(now), dayStart);
+      if (+currentBoundary > now) currentBoundary = sleepDayBoundary(currentBoundary, dayStart, -1);
+      const rows = [];
+      for (let i = 0; i < days; i++) {
+        const from = sleepDayBoundary(currentBoundary, dayStart, -i);
+        const to = sleepDayBoundary(from, dayStart, 1);
+        const segments = sleepDaySegments(records, from, to, now);
+        rows.push({ from, to, segments });
+      }
+      const button = 'px-4 py-2 rounded-lg font-medium bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50';
+      const input = 'w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-800';
+      return (
+        <section aria-label="Sleep" className="space-y-6">
+          <div className="flex flex-wrap items-center justify-between gap-3"><h2 className="text-xl font-bold">Sleep</h2><button type="button" onClick={refresh} className="text-indigo-600 dark:text-indigo-400 text-sm font-medium">Refresh</button></div>
+          {error && <p role="alert" className="text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950/40 rounded-lg p-3">{error}</p>}
+          {!data ? <p>{error ? 'Sleep data is unavailable. Use Refresh to retry.' : 'Loading sleep data…'}</p> : <>
+            <div className="rounded-xl border border-slate-200 dark:border-slate-700 p-4 space-y-3">
+              <p className="font-semibold">{data.active ? 'Currently asleep' : 'Not currently asleep'}</p>
+              {data.active && <p className="text-sm">Started {new Date(data.active.start_time).toLocaleString()} · {sleepDuration(now - +new Date(data.active.start_time))}</p>}
+              <p className="text-sm text-slate-500 dark:text-slate-400">{data.latest_completed ? <>Last sleep: {new Date(data.latest_completed.start_time).toLocaleString()} – {new Date(data.latest_completed.end_time).toLocaleString()} · {sleepDuration(+new Date(data.latest_completed.end_time) - +new Date(data.latest_completed.start_time))} · ended {sleepDuration(now - +new Date(data.latest_completed.end_time))} ago</> : 'No completed sleep yet.'}</p>
+              <button type="button" disabled={busy} onClick={() => mutate('/api/sleep/' + (data.active ? 'stop' : 'start'), 'POST', data.active ? { id: data.active.id } : {})} className={button}>{data.active ? 'Stop sleep' : 'Start sleep'}</button>
+            </div>
+            <div><h3 className="font-semibold mb-1">Sleep timeline</h3><p className="text-sm text-slate-500 dark:text-slate-400 mb-3">Days begin at {dayStart} in your local time. Bars show elapsed time between local day boundaries.</p>
+              <div className="space-y-3 max-h-96 overflow-y-auto">{rows.map(row => <div key={+row.from}>
+                <div className="flex justify-between text-sm mb-1"><span>{row.from.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}</span><span>{sleepDuration(row.segments.reduce((sum, s) => sum + s.b - s.a, 0))}</span></div>
+                <div className="relative h-6 rounded bg-slate-200 dark:bg-slate-700 overflow-hidden" aria-label={'Sleep on ' + row.from.toLocaleDateString() + ': ' + sleepDuration(row.segments.reduce((sum, s) => sum + s.b - s.a, 0))}>
+                  {row.segments.map(s => <div key={s.record.id} role="img" aria-label={'Sleep from ' + new Date(s.a).toLocaleString() + ' to ' + new Date(s.b).toLocaleString()} className="absolute h-full bg-indigo-500" title={new Date(s.a).toLocaleString() + ' – ' + new Date(s.b).toLocaleString()} style={{ left: ((s.a - +row.from) / (row.to - row.from) * 100) + '%', width: ((s.b - s.a) / (row.to - row.from) * 100) + '%' }} />)}
+                </div>
+                <div className="flex justify-between text-xs text-slate-500 dark:text-slate-400 mt-1"><span>{row.from.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span><span>{row.to.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} next day</span></div>
+              </div>)}</div>
+              <button type="button" onClick={() => setDays(days + 14)} className="mt-3 text-sm font-medium text-indigo-600 dark:text-indigo-400">Show earlier days</button>
+            </div>
+            <div><div className="flex flex-wrap justify-between items-center gap-2 mb-3"><h3 className="font-semibold">Sleep history</h3><button type="button" className={button} onClick={() => { setEditing(null); setStart(''); setEnd(''); setShowForm(true); }}>Add sleep</button></div>
+              {showForm && <form onSubmit={submit} className="space-y-3 mb-4 p-4 border border-slate-200 dark:border-slate-700 rounded-lg">
+                <h4 className="font-medium">{editing !== null ? 'Edit sleep' : 'Add sleep'}</h4>
+                <label className="block text-sm">Start<input className={input} type="datetime-local" step="1" required value={start} onChange={e => setStart(e.target.value)} /></label>
+                <label className="block text-sm">End<input className={input} type="datetime-local" step="1" required value={end} onChange={e => setEnd(e.target.value)} /></label>
+                <div className="flex gap-2"><button disabled={busy} className={button} type="submit">Save</button><button type="button" onClick={() => setShowForm(false)} className="px-4 py-2 rounded-lg bg-slate-200 dark:bg-slate-700">Cancel</button></div>
+              </form>}
+              {data.entries.length === 0 ? <p className="text-sm text-slate-500">No completed sleep yet.</p> : <div className="space-y-2">{data.entries.map(entry => <div key={entry.id} className="flex flex-wrap items-center justify-between gap-2 p-3 border border-slate-200 dark:border-slate-700 rounded-lg text-sm">
+                <div><div>{new Date(entry.start_time).toLocaleString()} – {new Date(entry.end_time).toLocaleString()}</div><div className="text-slate-500">{sleepDuration(+new Date(entry.end_time) - +new Date(entry.start_time))}</div></div>
+                <div className="flex gap-3"><button type="button" className="text-indigo-600 dark:text-indigo-400" onClick={() => { setEditing(entry); setStart(sleepLocalInput(entry.start_time)); setEnd(sleepLocalInput(entry.end_time)); setShowForm(true); }}>Edit</button><button type="button" disabled={busy} className="text-red-600 dark:text-red-400" onClick={() => { if (window.confirm('Delete this sleep entry?')) mutate('/api/sleep/' + entry.id, 'DELETE', { expected_start_time: entry.start_time, expected_end_time: entry.end_time }); }}>Delete</button></div>
+              </div>)}</div>}
+            </div>
+          </>}
+        </section>
+      );
+    }
+
     function App() {
       const [entries, setEntries] = useState([]);
       const [profile, setProfile] = useState(undefined); // undefined = not yet loaded, null = needs onboarding
@@ -700,7 +952,6 @@
       const [newDate, setNewDate] = useState('');
       const [newWeight, setNewWeight] = useState('');
       const [editingId, setEditingId] = useState(null);
-      const fileInputRef = useRef(null);
       
       // State for trendline window configuration
       const [trendWindow, setTrendWindow] = useState(3);
@@ -710,6 +961,7 @@
       // (milestones tabs), so only one whole section is visible at a time
       // instead of stacking vertically.
       const [mainTab, setMainTab] = useState('weight');
+      const [section, setSection] = useState('growth');
 
       // Tabbed containers: growth-tracking tabs (unchanged sections, now
       // switchable) and the new milestones tabs.
@@ -1144,27 +1396,6 @@
         }
       };
 
-      const handleExport = () => {
-        const dataToSave = {
-          profile: profile ? { name: profile.name, birth_date: profile.birth_date, sex: profile.sex } : null,
-          entries
-        };
-        const jsonString = JSON.stringify(dataToSave, null, 2);
-        const blob = new Blob([jsonString], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-
-        const slug = (profile && profile.name ? profile.name : '')
-          .trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'child';
-
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = slug + '-weight-data.json';
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(url);
-      };
-
       const handleProfileSubmit = async (formValues) => {
         try {
           const res = await fetch(PROFILE_URL, {
@@ -1191,59 +1422,6 @@
           setProfileForm({ name: profile.name, birth_date: profile.birth_date, sex: profile.sex });
         }
         setShowProfileModal(true);
-      };
-
-      const handleImport = (e) => {
-        const file = e.target.files[0];
-        if (!file) return;
-
-        const reader = new FileReader();
-        reader.onload = async (event) => {
-          try {
-            const importedData = JSON.parse(event.target.result);
-            
-            if (importedData.entries && Array.isArray(importedData.entries)) {
-              setIsLoading(true);
-
-              // Support both the new { profile, entries } shape and the
-              // legacy { birthDate, entries } shape from older exports.
-              // Only apply an imported profile if none exists yet; never
-              // silently overwrite an existing profile.
-              if (!profile) {
-                if (importedData.profile && importedData.profile.name && importedData.profile.birth_date && importedData.profile.sex) {
-                  await handleProfileSubmit(importedData.profile);
-                } else if (importedData.birthDate) {
-                  // Legacy export has no name/sex; leave onboarding to the user.
-                }
-              }
-
-              for (const entry of importedData.entries) {
-                await fetch(API_URL, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ date: entry.date, weight: Number(entry.weight) })
-                });
-              }
-              const res = await fetch(API_URL);
-              const data = await res.json();
-              if (Array.isArray(data)) {
-                const formattedData = data.map(d => ({
-                  ...d,
-                  date: new Date(d.date).toISOString().split('T')[0]
-                }));
-                setEntries(formattedData);
-              }
-              setIsLoading(false);
-              alert("Import successful! Data is now saved to the database.");
-            }
-          } catch (error) {
-            console.error("Import error:", error);
-            alert("Failed to read the file or save to the database.");
-            setIsLoading(false);
-          }
-        };
-        reader.readAsText(file);
-        e.target.value = '';
       };
 
       const formatDate = (timestamp) => {
@@ -1415,9 +1593,13 @@
       }
 
       return (
-        <div className="w-full min-h-screen p-1 md:p-6 font-sans flex justify-center items-start text-slate-800 dark:text-slate-100">
+        <div className="w-full min-h-screen p-1 pb-24 md:p-6 font-sans flex justify-center items-start text-slate-800 dark:text-slate-100">
           <ThemeToggle isDark={isDark} onToggle={toggleTheme} />
-          <div className="w-full max-w-4xl md:bg-white dark:md:bg-slate-800 md:rounded-2xl md:shadow-sm md:border md:border-slate-200 dark:md:border-slate-700 p-2 md:p-6">
+          <div className="w-full max-w-6xl md:flex md:gap-5">
+            <nav aria-label="Main navigation" className="fixed z-40 bottom-0 left-0 right-0 flex justify-around bg-white dark:bg-slate-800 border-t border-slate-200 dark:border-slate-700 pb-[env(safe-area-inset-bottom)] md:static md:block md:w-40 md:shrink-0 md:rounded-xl md:border md:p-2 md:h-fit">
+              {[{ key: 'growth', label: 'Tracking' }, { key: 'sleep', label: 'Sleep' }].map(item => <button key={item.key} type="button" aria-current={section === item.key ? 'page' : undefined} onClick={() => setSection(item.key)} className={'flex-1 md:w-full px-4 py-4 md:py-3 text-sm font-semibold md:text-left rounded-lg ' + (section === item.key ? 'text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/40' : 'text-slate-500 dark:text-slate-400')}>{item.label}</button>)}
+            </nav>
+          <div className="min-w-0 w-full max-w-4xl md:bg-white dark:md:bg-slate-800 md:rounded-2xl md:shadow-sm md:border md:border-slate-200 dark:md:border-slate-700 p-2 md:p-6">
             
             <div className="flex flex-col md:flex-row md:justify-between md:items-end gap-4 mb-8">
               <div className="flex items-start gap-3">
@@ -1425,9 +1607,10 @@
                   <h1 className="text-2xl font-bold tracking-tight">{profile.name}'s Sprog Log</h1>
                 </div>
                 <button
-                  onClick={openSettingsModal}
+                  onClick={() => setSection('settings')}
                   className="p-2 text-slate-400 dark:text-slate-500 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 rounded-md transition-colors"
-                  title="Edit profile"
+                  title="Settings"
+                  aria-label="Settings"
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
                 </button>
@@ -1442,6 +1625,9 @@
               </div>
             </div>
 
+            {section === 'sleep' && <SleepView />}
+            {section === 'settings' && <SettingsView onEditProfile={openSettingsModal} />}
+            {section === 'growth' && <React.Fragment>
             {profile.sex === 'male' && (
               <div className="mb-6 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-300 text-sm rounded-lg px-4 py-3">
                 Reference centiles shown are WHO girls data. Boys reference data is not yet included.
@@ -1726,30 +1912,6 @@
                       {isLoading && <span className="text-xs text-indigo-500 dark:text-indigo-400 animate-pulse ml-2">Loading DB...</span>}
                     </div>
                     
-                    <div className="flex gap-2 w-full sm:w-auto">
-                      <button 
-                        onClick={handleExport}
-                        className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-3 py-1.5 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 text-sm font-medium rounded shadow-sm hover:bg-slate-50 dark:hover:bg-slate-700/60 transition-colors"
-                      >
-                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
-                        Export JSON
-                      </button>
-                      
-                      <button 
-                        onClick={() => fileInputRef.current?.click()}
-                        className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-3 py-1.5 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 text-sm font-medium rounded shadow-sm hover:bg-slate-50 dark:hover:bg-slate-700/60 transition-colors"
-                      >
-                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
-                        Import JSON
-                      </button>
-                      <input 
-                        type="file" 
-                        accept=".json" 
-                        ref={fileInputRef} 
-                        onChange={handleImport} 
-                        className="hidden" 
-                      />
-                    </div>
                   </div>
                   
                   {entries.length === 0 ? (
@@ -1971,7 +2133,8 @@
             )}
               </div>
             </div>
-
+            </React.Fragment>}
+          </div>
           </div>
         </div>
       );

@@ -8,6 +8,8 @@ const app = express();
 const port = process.env.PORT || 3000;
 
 app.use(cors());
+// Backups can contain years of history; keep the ordinary API's smaller limit.
+app.use('/api/backup', express.json({ limit: '10mb' }));
 app.use(express.json());
 
 // Respect the platform proxy's X-Forwarded-* headers so req.ip is the real
@@ -64,6 +66,16 @@ async function initDb() {
       value TEXT NOT NULL
     )
   `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS sleep_entries (
+      id SERIAL PRIMARY KEY,
+      start_time TIMESTAMPTZ NOT NULL,
+      end_time TIMESTAMPTZ,
+      CHECK (end_time IS NULL OR end_time > start_time)
+    )
+  `);
+  await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS sleep_one_active ON sleep_entries ((1)) WHERE end_time IS NULL');
+  await pool.query('CREATE INDEX IF NOT EXISTS sleep_start_time_idx ON sleep_entries (start_time DESC)');
   // Added for the milestone details/icon feature. Idempotent so existing
   // deployments (which already have the milestones table above) pick up
   // the new columns without a destructive migration. Existing rows
@@ -525,6 +537,342 @@ app.delete('/api/milestones/:id', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Server error deleting milestone' });
+  }
+});
+
+// All sleep writes, including backup imports, use this transaction lock.
+// It serializes overlap checks with writes across multiple server processes.
+async function sleepMutation(res, operation) {
+  let client;
+  try {
+    client = await pool.connect();
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock(73657267, 1)');
+    const result = await operation(client);
+    await client.query('COMMIT');
+    res.status(result.status || 200).json(result.body);
+  } catch (err) {
+    if (client) await client.query('ROLLBACK').catch(() => {});
+    console.error(err);
+    res.status(500).json({ error: 'Server error updating sleep' });
+  } finally {
+    if (client) client.release();
+  }
+}
+
+async function activeSleep(client) {
+  const result = await client.query('SELECT * FROM sleep_entries WHERE end_time IS NULL ORDER BY start_time DESC LIMIT 1');
+  return result.rows[0] || null;
+}
+
+async function sleepConflict(client, message) {
+  return { status: 409, body: { error: message, active: await activeSleep(client) } };
+}
+
+// Explicit offsets prevent server timezone settings from changing the meaning
+// of a timestamp submitted by a browser.
+function validSleepTimestamp(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/.test(value) || !Number.isFinite(Date.parse(value))) return false;
+  const [year, month, day] = value.slice(0, 10).split('-').map(Number);
+  const calendar = new Date(value.slice(0, 10) + 'T00:00:00Z');
+  return year >= 1 && calendar.getUTCFullYear() === year && calendar.getUTCMonth() + 1 === month && calendar.getUTCDate() === day;
+}
+
+function validateSleepInterval(start, end) {
+  if (!validSleepTimestamp(start) || !validSleepTimestamp(end)) return 'start_time and end_time must be valid timestamps with timezone';
+  const startMs = Date.parse(start);
+  const endMs = Date.parse(end);
+  if (endMs <= startMs) return 'end_time must be after start_time';
+  if (startMs > Date.now() || endMs > Date.now()) return 'sleep timestamps cannot be in the future';
+  return null;
+}
+
+function matchesExpectedSleep(row, body) {
+  return validSleepTimestamp(body.expected_start_time) && validSleepTimestamp(body.expected_end_time) &&
+    Date.parse(body.expected_start_time) === new Date(row.start_time).getTime() &&
+    Date.parse(body.expected_end_time) === new Date(row.end_time).getTime();
+}
+
+async function overlapsSleep(client, start, end, excludeId) {
+  const result = await client.query(
+    `SELECT 1 FROM sleep_entries
+     WHERE ($3::integer IS NULL OR id <> $3)
+       AND start_time < $2::timestamptz
+       AND (end_time IS NULL OR end_time > $1::timestamptz)
+     LIMIT 1`,
+    [start, end, excludeId || null]
+  );
+  return result.rows.length > 0;
+}
+
+app.get('/api/sleep', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM sleep_entries ORDER BY start_time DESC, id DESC');
+    const settings = await pool.query("SELECT value FROM app_settings WHERE key = 'sleep_day_start'");
+    const entries = result.rows.filter(row => row.end_time !== null);
+    res.json({ entries, active: result.rows.find(row => row.end_time === null) || null,
+      latest_completed: entries[0] || null, day_start: settings.rows[0]?.value || '07:00' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Server error fetching sleep' });
+  }
+});
+
+app.put('/api/sleep/day-start', async (req, res) => {
+  const { day_start } = req.body || {};
+  if (typeof day_start !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(day_start)) {
+    return res.status(400).json({ error: 'day_start must be HH:MM' });
+  }
+  await sleepMutation(res, async client => {
+    await client.query("INSERT INTO app_settings (key, value) VALUES ('sleep_day_start', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", [day_start]);
+    return { body: { day_start } };
+  });
+});
+
+app.post('/api/sleep/start', async (req, res) => {
+  await sleepMutation(res, async client => {
+    const active = await activeSleep(client);
+    if (active) return sleepConflict(client, 'Sleep is already active');
+    // A future or overlapping completed interval must not be covered by an active sleep.
+    const overlap = await client.query('SELECT 1 FROM sleep_entries WHERE end_time > clock_timestamp() LIMIT 1');
+    if (overlap.rows.length) return sleepConflict(client, 'Sleep overlaps an existing entry');
+    const result = await client.query('INSERT INTO sleep_entries (start_time) VALUES (clock_timestamp()) RETURNING *');
+    return { body: result.rows[0] };
+  });
+});
+
+app.post('/api/sleep/stop', async (req, res) => {
+  await sleepMutation(res, async client => {
+    const active = await activeSleep(client);
+    if (!active || String(active.id) !== String((req.body || {}).id)) return sleepConflict(client, 'Active sleep has changed');
+    const result = await client.query('UPDATE sleep_entries SET end_time = clock_timestamp() WHERE id = $1 AND start_time < clock_timestamp() RETURNING *', [active.id]);
+    if (!result.rows.length) return sleepConflict(client, 'Sleep cannot end before it starts');
+    return { body: result.rows[0] };
+  });
+});
+
+app.post('/api/sleep', async (req, res) => {
+  const { start_time, end_time } = req.body || {};
+  const error = validateSleepInterval(start_time, end_time);
+  if (error) return res.status(400).json({ error });
+  await sleepMutation(res, async client => {
+    if (await overlapsSleep(client, start_time, end_time, null)) return sleepConflict(client, 'Sleep overlaps an existing entry');
+    const result = await client.query('INSERT INTO sleep_entries (start_time, end_time) VALUES ($1, $2) RETURNING *', [start_time, end_time]);
+    return { body: result.rows[0] };
+  });
+});
+
+app.put('/api/sleep/:id', async (req, res) => {
+  const { start_time, end_time } = req.body || {};
+  const error = validateSleepInterval(start_time, end_time);
+  if (error) return res.status(400).json({ error });
+  if (!/^[1-9]\d*$/.test(req.params.id) || Number(req.params.id) > 2147483647) return res.status(400).json({ error: 'Invalid sleep id' });
+  await sleepMutation(res, async client => {
+    const existing = await client.query('SELECT * FROM sleep_entries WHERE id = $1', [req.params.id]);
+    if (!existing.rows.length) return { status: 404, body: { error: 'Sleep entry not found' } };
+    if (existing.rows[0].end_time === null) return sleepConflict(client, 'Cannot edit active sleep');
+    if (!matchesExpectedSleep(existing.rows[0], req.body || {})) return { status: 409, body: { error: 'Sleep entry has changed', active: await activeSleep(client), entry: existing.rows[0] } };
+    if (await overlapsSleep(client, start_time, end_time, req.params.id)) return sleepConflict(client, 'Sleep overlaps an existing entry');
+    const result = await client.query('UPDATE sleep_entries SET start_time = $1, end_time = $2 WHERE id = $3 RETURNING *', [start_time, end_time, req.params.id]);
+    return { body: result.rows[0] };
+  });
+});
+
+app.delete('/api/sleep/:id', async (req, res) => {
+  if (!/^[1-9]\d*$/.test(req.params.id) || Number(req.params.id) > 2147483647) return res.status(400).json({ error: 'Invalid sleep id' });
+  await sleepMutation(res, async client => {
+    const existing = await client.query('SELECT * FROM sleep_entries WHERE id = $1', [req.params.id]);
+    if (!existing.rows.length) return { status: 404, body: { error: 'Sleep entry not found' } };
+    if (existing.rows[0].end_time === null) return sleepConflict(client, 'Cannot delete active sleep');
+    if (!matchesExpectedSleep(existing.rows[0], req.body || {})) return { status: 409, body: { error: 'Sleep entry has changed', active: await activeSleep(client), entry: existing.rows[0] } };
+    await client.query('DELETE FROM sleep_entries WHERE id = $1', [req.params.id]);
+    return { body: { message: 'Deleted successfully' } };
+  });
+});
+
+// Versioned backups contain only child data, never app credentials. Each
+// property is an independently replaceable section; absent properties are
+// deliberately left untouched on import.
+const BACKUP_SECTIONS = ['profile', 'weight', 'milestones', 'sleep', 'settings'];
+const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
+
+function backupDate(value) {
+  // Older exports can contain ISO timestamps from the measurements API.
+  if (typeof value !== 'string') return null;
+  const match = /^(\d{4}-\d{2}-\d{2})(?:T00:00:00(?:\.000)?Z)?$/.exec(value);
+  if (!match) return null;
+  const date = new Date(match[1] + 'T00:00:00Z');
+  return !isNaN(date.getTime()) && date.toISOString().slice(0, 10) === match[1] ? match[1] : null;
+}
+
+function backupTimestamp(value) {
+  if (typeof value !== 'string') return null;
+  const match = /^(\d{4}-\d{2}-\d{2})T([01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{1,3})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/i.exec(value);
+  if (!match || !backupDate(match[1])) return null;
+  const time = Date.parse(value);
+  return Number.isFinite(time) ? time : null;
+}
+
+function validateBackup(data) {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('Backup must be an object');
+  const legacy = !hasOwn(data, 'version');
+  if (!legacy && data.version !== 1) throw new Error('Unsupported backup version');
+  const keys = ['profile', 'entries', 'milestones', 'sleep', 'settings'];
+  if (!keys.some(key => hasOwn(data, key))) throw new Error('Backup contains no sections');
+  if (legacy && (!Array.isArray(data.entries) || keys.slice(2).some(key => hasOwn(data, key)))) {
+    throw new Error('Invalid legacy backup');
+  }
+  const result = {};
+  // Older exports may contain no profile or an incomplete one. Preserve the
+  // existing profile in that case rather than inventing or deleting it.
+  const legacyProfileComplete = data.profile && typeof data.profile === 'object' &&
+    data.profile.name && data.profile.birth_date && data.profile.sex;
+  if (hasOwn(data, 'profile') && (!legacy || legacyProfileComplete)) {
+    const profile = data.profile;
+    if (profile === null) result.profile = null;
+    else {
+      if (!profile || typeof profile !== 'object' || Array.isArray(profile) ||
+          typeof profile.name !== 'string' || !profile.name.trim() || profile.name.trim().length > 60 ||
+          !backupDate(profile.birth_date) || !['male', 'female'].includes(profile.sex)) throw new Error('Invalid profile');
+      result.profile = { name: profile.name.trim(), birth_date: backupDate(profile.birth_date), sex: profile.sex };
+    }
+  }
+  if (hasOwn(data, 'entries')) {
+    if (!Array.isArray(data.entries)) throw new Error('Invalid weight entries');
+    result.entries = data.entries.map(entry => {
+      const date = entry && backupDate(entry.date);
+      const weight = entry && (typeof entry.weight === 'number' || (legacy && typeof entry.weight === 'string' && entry.weight.trim()) ? Number(entry.weight) : NaN);
+      if (!date || !Number.isInteger(weight) || weight <= 0 || weight > 2147483647) throw new Error('Invalid weight entry');
+      return { date, weight };
+    });
+  }
+  if (hasOwn(data, 'milestones')) {
+    if (!Array.isArray(data.milestones)) throw new Error('Invalid milestones');
+    result.milestones = data.milestones.map(item => {
+      if (!item || typeof item !== 'object' || !backupDate(item.date) || validateMilestoneInput(backupDate(item.date), item.description, item.details, item.icon)) throw new Error('Invalid milestone');
+      return normalizeMilestoneInput({ ...item, date: backupDate(item.date) });
+    });
+  }
+  if (hasOwn(data, 'sleep')) {
+    if (!Array.isArray(data.sleep)) throw new Error('Invalid sleep entries');
+    const now = Date.now();
+    result.sleep = data.sleep.map(item => {
+      if (!item || typeof item !== 'object') throw new Error('Invalid sleep entry');
+      const start = backupTimestamp(item.start_time), end = backupTimestamp(item.end_time);
+      if (start === null || end === null || start >= end || end > now) throw new Error('Invalid sleep entry');
+      return { start_time: new Date(start).toISOString(), end_time: new Date(end).toISOString() };
+    }).sort((a, b) => a.start_time.localeCompare(b.start_time));
+    for (let i = 1; i < result.sleep.length; i++) {
+      if (result.sleep[i].start_time < result.sleep[i - 1].end_time) throw new Error('Sleep entries overlap');
+    }
+  }
+  if (hasOwn(data, 'settings')) {
+    if (!data.settings || typeof data.settings !== 'object' || Array.isArray(data.settings) ||
+        typeof data.settings.day_start !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(data.settings.day_start)) throw new Error('Invalid settings');
+    result.settings = { day_start: data.settings.day_start };
+  }
+  return result;
+}
+
+app.get('/api/backup', async (req, res) => {
+  const selected = req.query.sections === undefined ? BACKUP_SECTIONS :
+    typeof req.query.sections === 'string' ? req.query.sections.split(',') : [];
+  if (!selected.length || selected.some(section => !BACKUP_SECTIONS.includes(section))) {
+    return res.status(400).json({ error: 'Invalid backup sections' });
+  }
+  let client;
+  try {
+    client = await pool.connect();
+    await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
+    const backup = { version: 1 };
+    if (selected.includes('profile')) {
+      const result = await client.query("SELECT name, to_char(birth_date, 'YYYY-MM-DD') AS birth_date, sex FROM profile WHERE id = 1");
+      backup.profile = result.rows[0] || null;
+    }
+    if (selected.includes('weight')) {
+      backup.entries = (await client.query("SELECT to_char(date, 'YYYY-MM-DD') AS date, weight FROM measurements ORDER BY date, id")).rows;
+    }
+    if (selected.includes('milestones')) {
+      backup.milestones = (await client.query("SELECT to_char(date, 'YYYY-MM-DD') AS date, description, details, icon FROM milestones ORDER BY date, id")).rows;
+    }
+    if (selected.includes('sleep')) {
+      backup.sleep = (await client.query('SELECT start_time, end_time FROM sleep_entries WHERE end_time IS NOT NULL ORDER BY start_time, id')).rows;
+    }
+    if (selected.includes('settings')) {
+      const setting = await client.query("SELECT value FROM app_settings WHERE key = 'sleep_day_start'");
+      backup.settings = { day_start: setting.rows[0] ? setting.rows[0].value : '07:00' };
+    }
+    await client.query('COMMIT');
+    res.json(backup);
+  } catch (err) {
+    if (client) await client.query('ROLLBACK').catch(() => {});
+    console.error(err);
+    res.status(500).json({ error: 'Server error exporting backup' });
+  } finally {
+    if (client) client.release();
+  }
+});
+
+app.post('/api/backup/validate', (req, res) => {
+  try {
+    const data = validateBackup(req.body);
+    const sections = Object.keys(data).map(key => key === 'entries' ? 'weight' : key);
+    res.json({ sections });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/backup/import', async (req, res) => {
+  let data;
+  try {
+    data = validateBackup(req.body);
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
+  }
+  let client;
+  try {
+    client = await pool.connect();
+    await client.query('BEGIN');
+    // The lock is shared with all sleep mutations. Checking after acquiring it
+    // closes the race with starting or stopping a timer during an import.
+    if (hasOwn(data, 'sleep') || hasOwn(data, 'settings')) {
+      await client.query('SELECT pg_advisory_xact_lock(73657267, 1)');
+    }
+    if (hasOwn(data, 'sleep')) {
+      const active = await client.query('SELECT id, start_time, end_time FROM sleep_entries WHERE end_time IS NULL LIMIT 1');
+      if (active.rows.length) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ error: 'Cannot import sleep while a sleep is active', active: active.rows[0] });
+      }
+    }
+    if (hasOwn(data, 'profile')) {
+      await client.query('DELETE FROM profile WHERE id = 1');
+      if (data.profile) await client.query('INSERT INTO profile (id, name, birth_date, sex) VALUES (1, $1, $2, $3)', [data.profile.name, data.profile.birth_date, data.profile.sex]);
+    }
+    if (hasOwn(data, 'entries')) {
+      await client.query('DELETE FROM measurements');
+      for (const entry of data.entries) await client.query('INSERT INTO measurements (date, weight) VALUES ($1, $2)', [entry.date, entry.weight]);
+    }
+    if (hasOwn(data, 'milestones')) {
+      await client.query('DELETE FROM milestones');
+      for (const item of data.milestones) await client.query('INSERT INTO milestones (date, description, details, icon) VALUES ($1, $2, $3, $4)', [item.date, item.description, item.details, item.icon]);
+    }
+    if (hasOwn(data, 'sleep')) {
+      await client.query('DELETE FROM sleep_entries');
+      for (const item of data.sleep) await client.query('INSERT INTO sleep_entries (start_time, end_time) VALUES ($1, $2)', [item.start_time, item.end_time]);
+    }
+    if (hasOwn(data, 'settings')) {
+      await client.query("INSERT INTO app_settings (key, value) VALUES ('sleep_day_start', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", [data.settings.day_start]);
+    }
+    await client.query('COMMIT');
+    res.json({ message: 'Import successful' });
+  } catch (err) {
+    if (client) await client.query('ROLLBACK').catch(() => {});
+    console.error(err);
+    res.status(500).json({ error: 'Server error importing backup' });
+  } finally {
+    if (client) client.release();
   }
 });
 

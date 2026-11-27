@@ -1,6 +1,6 @@
 # Sprog Log
 
-A baby weight tracker that plots logged measurements against WHO growth centiles, with a simple linear-regression trendline projection.
+A single-child tracker for weight, milestones and sleep. Weight measurements are plotted against WHO growth centiles with a simple linear-regression trendline projection.
 
 ## Prerequisites
 
@@ -9,7 +9,7 @@ A baby weight tracker that plots logged measurements against WHO growth centiles
 
 ## Environment variables
 
-Copy `.env.example` to `.env` and fill in:
+Copy `.env.example` to `.env` and fill in the values below. The server reads environment variables; it does not load `.env` automatically.
 
 | Variable       | Required | Default | Notes                        |
 | -------------- | -------- | ------- | ----------------------------- |
@@ -24,14 +24,17 @@ Note: `server.js` connects to Postgres with `ssl: { rejectUnauthorized: false }`
 ```bash
 npm install
 cp .env.example .env   # then edit .env
+set -a
+. ./.env               # export the values for this shell
+set +a
 npm start
 ```
 
-On boot, the server creates the `measurements` and `profile` tables if they don't already exist (`initDb()` in `server.js`), so a fresh database works out of the box. On first load the app shows an onboarding modal asking for the child's name, birth date, and sex; this is stored as a single profile row in Postgres.
+Open `http://localhost:3000` (or the configured port). On boot, the server creates its tables and applies non-destructive schema additions if needed (`initDb()` in `server.js`), so a fresh database works out of the box. After setting up or entering the PIN, enter the child's name, birth date, and sex in the onboarding form; the profile is stored in Postgres. In a hosted environment, configure environment variables through the hosting provider instead of sourcing `.env`.
 
 ## PIN access
 
-The app is protected by a shared PIN gate (no user accounts). The frontend and all `/api/*` data endpoints require an unlocked session.
+The app is protected by a shared PIN gate (no user accounts). The application shell is public, but all `/api/*` data endpoints require an unlocked session.
 
 - **First run / upgrading:** if no PIN is configured yet (fresh install or an existing deployment that upgraded to this version), the app starts in *setup mode* and the first visitor is prompted to create a PIN. The PIN is stored in Postgres as an `scrypt` hash. All data endpoints stay locked until a PIN exists.
 - **Unlocking:** entering the correct PIN sets a signed `httpOnly` cookie that keeps that device unlocked for 30 days.
@@ -39,6 +42,22 @@ The app is protected by a shared PIN gate (no user accounts). The frontend and a
 - **Brute-force protection:** failed unlock attempts are rate-limited per IP; 5 consecutive failures lock the IP out for 15 minutes.
 
 Note: this is a single shared PIN, so anyone who knows it has full access. It is intended to keep the deployment private from strangers and bots, not to provide per-user security.
+
+## Sleep tracking
+
+Select **Sleep** in the navigation to start and stop a shared timer or add, edit and delete completed sleep periods. The **Tracking** view retains the Weight and Milestones tabs. Only one timer can run at a time, and sleep periods cannot overlap. The active timer is stored on the server, so it survives reloads and can be stopped on another unlocked device. Devices refresh periodically and when the view regains focus; a network error can delay synchronization.
+
+The timeline shows the newest days first and splits sleeps at the configured day start (07:00 by default). The setting is shared, but boundaries are interpreted in each viewing device's local time zone, so devices in different time zones can show different day groupings. Local daylight-saving transitions can make a displayed day shorter or longer than 24 elapsed hours.
+
+## Backup and restore
+
+Open Settings with the gear button. Settings can export individual sections or all data as JSON: profile, weight, milestones, completed sleeps and the shared sleep-day setting. Active timers, PINs, session credentials and the device's theme are not exported. Keep backups private: they contain the child's information.
+
+Import validates the file and asks for confirmation before **replacing** the sections present in it, rather than adding to existing records; omitted sections remain unchanged. Sleep history cannot be imported while a timer is active. Older `{profile, entries}` and `{birthDate, entries}` weight backups are accepted; an incomplete legacy profile does not replace the existing profile. Imports are applied atomically.
+
+## Tests
+
+Run `npm test` for the focused backup, sleep validation and timeline tests. PostgreSQL integration and browser checks require a running database and a browser.
 
 ## Known limitations
 

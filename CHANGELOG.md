@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+- Shared sleep tracking with a persistent start/stop timer, manual entries, editing and deletion. Sleep periods cannot overlap and only one timer can be active.
+- A Sleep view with a scrollable timeline, local day boundaries and a shared configurable day start. The existing Weight and Milestones tabs remain in the Tracking view.
+- JSON exports for individual sections or all data, plus validated, atomic imports. Exports omit active sleep, PINs, sessions and device theme preferences.
+- Focused tests for backup validation, sleep intervals and timeline boundaries, including daylight-saving transitions.
+
+### Changed
+- Backup imports replace the sections present in the file instead of adding weight measurements; omitted sections remain unchanged. Existing weight-only backups remain supported.
+
 ## [1.3.1]
 
 ### Fixed
