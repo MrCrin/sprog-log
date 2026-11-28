@@ -826,6 +826,11 @@
         return b > a ? { record, a, b } : null;
       }).filter(Boolean);
     }
+    function sleepHistoryEntries(entries, now, days) {
+      const cutoff = new Date(now);
+      cutoff.setDate(cutoff.getDate() - days);
+      return entries.filter(entry => +new Date(entry.end_time) >= +cutoff);
+    }
     function sleepDuration(ms) {
       const minutes = Math.max(0, Math.floor(ms / 60000));
       return Math.floor(minutes / 60) + 'h ' + (minutes % 60) + 'm';
@@ -840,24 +845,33 @@
       const [data, setData] = useState(null);
       const [error, setError] = useState('');
       const [busy, setBusy] = useState(false);
+      const [refreshing, setRefreshing] = useState(0);
+      const [refreshedAt, setRefreshedAt] = useState(null);
       const [now, setNow] = useState(Date.now());
-      const [days, setDays] = useState(14);
+      const [days, setDays] = useState(7);
+      const [expandedSegment, setExpandedSegment] = useState(null);
+      const [historyDays, setHistoryDays] = useState(7);
       const [editing, setEditing] = useState(null);
       const [start, setStart] = useState('');
       const [end, setEnd] = useState('');
       const [showForm, setShowForm] = useState(false);
       const refresh = async () => {
+        setRefreshing(count => count + 1);
+        setNow(Date.now());
         try {
           const result = await fetchJson('/api/sleep');
           setData(result);
+          setRefreshedAt(Date.now());
           setError('');
         } catch (err) {
           setError((err.body && err.body.error) || 'Could not refresh sleep data. Please try again.');
+        } finally {
+          setRefreshing(count => count - 1);
         }
       };
       useEffect(() => {
         refresh();
-        const timer = setInterval(() => { setNow(Date.now()); refresh(); }, 60000);
+        const timer = setInterval(() => { refresh(); }, 15000);
         const focus = () => { setNow(Date.now()); refresh(); };
         window.addEventListener('focus', focus);
         return () => { clearInterval(timer); window.removeEventListener('focus', focus); };
@@ -900,28 +914,47 @@
         const segments = sleepDaySegments(records, from, to, now);
         rows.push({ from, to, segments });
       }
+      const historyEntries = data ? sleepHistoryEntries(data.entries, now, historyDays) : [];
+      const hasEarlierHistory = data && historyEntries.length < data.entries.length;
       const button = 'px-4 py-2 rounded-lg font-medium bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50';
       const input = 'w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-800';
+      const statusTime = data && (data.active ? data.active.start_time : data.latest_completed && data.latest_completed.end_time);
+      const formatStatusTime = value => {
+        const date = new Date(value), today = new Date(now);
+        return date.toDateString() === today.toDateString() ? date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : date.toLocaleString();
+      };
       return (
         <section aria-label="Sleep" className="space-y-6">
-          <div className="flex flex-wrap items-center justify-between gap-3"><h2 className="text-xl font-bold">Sleep</h2><button type="button" onClick={refresh} className="text-indigo-600 dark:text-indigo-400 text-sm font-medium">Refresh</button></div>
+          <div className="flex flex-wrap items-center justify-between gap-3"><h2 className="text-xl font-bold">Sleep</h2><button type="button" onClick={refresh} aria-label={refreshing ? 'Refreshing sleep data' : 'Refresh sleep data'} title="Refresh sleep data" className="p-2 text-indigo-600 dark:text-indigo-400"><svg className={'w-5 h-5 ' + (refreshing ? 'animate-spin' : '')} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg></button></div>
+          <p role="status" className="text-xs text-slate-500 dark:text-slate-400">{refreshing ? 'Refreshing sleep data…' : refreshedAt ? 'Updated at ' + new Date(refreshedAt).toLocaleTimeString() : ''}</p>
           {error && <p role="alert" className="text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950/40 rounded-lg p-3">{error}</p>}
           {!data ? <p>{error ? 'Sleep data is unavailable. Use Refresh to retry.' : 'Loading sleep data…'}</p> : <>
             <div className="rounded-xl border border-slate-200 dark:border-slate-700 p-4 space-y-3">
-              <p className="font-semibold">{data.active ? 'Currently asleep' : 'Not currently asleep'}</p>
-              {data.active && <p className="text-sm">Started {new Date(data.active.start_time).toLocaleString()} · {sleepDuration(now - +new Date(data.active.start_time))}</p>}
-              <p className="text-sm text-slate-500 dark:text-slate-400">{data.latest_completed ? <>Last sleep: {new Date(data.latest_completed.start_time).toLocaleString()} – {new Date(data.latest_completed.end_time).toLocaleString()} · {sleepDuration(+new Date(data.latest_completed.end_time) - +new Date(data.latest_completed.start_time))} · ended {sleepDuration(now - +new Date(data.latest_completed.end_time))} ago</> : 'No completed sleep yet.'}</p>
-              <button type="button" disabled={busy} onClick={() => mutate('/api/sleep/' + (data.active ? 'stop' : 'start'), 'POST', data.active ? { id: data.active.id } : {})} className={button}>{data.active ? 'Stop sleep' : 'Start sleep'}</button>
+              <p className="font-semibold">{data.active ? 'Asleep for: ' : 'Awake for: '}{statusTime ? sleepDuration(now - +new Date(statusTime)) : 'Unknown'}</p>
+              {statusTime && <p className="text-sm">{data.active ? 'Fell asleep at: ' : 'Woke up at: '}{formatStatusTime(statusTime)}</p>}
+              <p className="text-sm text-slate-500 dark:text-slate-400">{data.latest_completed ? 'Last sleep was: ' + Math.max(0, Math.floor((+new Date(data.latest_completed.end_time) - +new Date(data.latest_completed.start_time)) / 60000)) + ' mins' : 'No completed sleep yet.'}</p>
+              <button type="button" disabled={busy} onClick={() => mutate('/api/sleep/' + (data.active ? 'stop' : 'start'), 'POST', data.active ? { id: data.active.id } : {})} className={button + ' w-full sm:w-auto'}>{data.active ? 'End sleep' : 'Start sleep'}</button>
             </div>
             <div><h3 className="font-semibold mb-1">Sleep timeline</h3><p className="text-sm text-slate-500 dark:text-slate-400 mb-3">Days begin at {dayStart} in your local time. Bars show elapsed time between local day boundaries.</p>
               <div className="space-y-3 max-h-96 overflow-y-auto">{rows.map(row => <div key={+row.from}>
                 <div className="flex justify-between text-sm mb-1"><span>{row.from.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}</span><span>{sleepDuration(row.segments.reduce((sum, s) => sum + s.b - s.a, 0))}</span></div>
                 <div className="relative h-6 rounded bg-slate-200 dark:bg-slate-700 overflow-hidden" aria-label={'Sleep on ' + row.from.toLocaleDateString() + ': ' + sleepDuration(row.segments.reduce((sum, s) => sum + s.b - s.a, 0))}>
-                  {row.segments.map(s => <div key={s.record.id} role="img" aria-label={'Sleep from ' + new Date(s.a).toLocaleString() + ' to ' + new Date(s.b).toLocaleString()} className="absolute h-full bg-indigo-500" title={new Date(s.a).toLocaleString() + ' – ' + new Date(s.b).toLocaleString()} style={{ left: ((s.a - +row.from) / (row.to - row.from) * 100) + '%', width: ((s.b - s.a) / (row.to - row.from) * 100) + '%' }} />)}
+                  {row.segments.map(s => {
+                    const key = +row.from + '-' + s.record.id;
+                    return <button key={key} type="button" aria-label={'Sleep from ' + new Date(s.a).toLocaleString() + ' to ' + new Date(s.b).toLocaleString()} aria-expanded={expandedSegment === key} aria-controls={'sleep-segment-' + key} onClick={() => setExpandedSegment(expandedSegment === key ? null : key)} className="absolute h-full bg-indigo-500 hover:bg-indigo-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-white" style={{ left: ((s.a - +row.from) / (row.to - row.from) * 100) + '%', width: ((s.b - s.a) / (row.to - row.from) * 100) + '%' }} />;
+                  })}
                 </div>
                 <div className="flex justify-between text-xs text-slate-500 dark:text-slate-400 mt-1"><span>{row.from.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span><span>{row.to.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} next day</span></div>
+                {row.segments.map(s => {
+                  const key = +row.from + '-' + s.record.id;
+                  return <div key={key} id={'sleep-segment-' + key} hidden={expandedSegment !== key} className="mt-2 rounded-lg bg-slate-100 dark:bg-slate-800 p-3 text-sm">
+                    <p>Duration: {sleepDuration((s.record.end_time ? +new Date(s.record.end_time) : now) - +new Date(s.record.start_time))}</p>
+                    <p>Start: {new Date(s.record.start_time).toLocaleString()}</p>
+                    <p>End: {s.record.end_time ? new Date(s.record.end_time).toLocaleString() : 'Still asleep'}</p>
+                  </div>;
+                })}
               </div>)}</div>
-              <button type="button" onClick={() => setDays(days + 14)} className="mt-3 text-sm font-medium text-indigo-600 dark:text-indigo-400">Show earlier days</button>
+              <button type="button" onClick={() => setDays(days => days + 7)} className="mt-3 text-sm font-medium text-indigo-600 dark:text-indigo-400">Load more</button>
             </div>
             <div><div className="flex flex-wrap justify-between items-center gap-2 mb-3"><h3 className="font-semibold">Sleep history</h3><button type="button" className={button} onClick={() => { setEditing(null); setStart(''); setEnd(''); setShowForm(true); }}>Add sleep</button></div>
               {showForm && <form onSubmit={submit} className="space-y-3 mb-4 p-4 border border-slate-200 dark:border-slate-700 rounded-lg">
@@ -930,10 +963,11 @@
                 <label className="block text-sm">End<input className={input} type="datetime-local" step="1" required value={end} onChange={e => setEnd(e.target.value)} /></label>
                 <div className="flex gap-2"><button disabled={busy} className={button} type="submit">Save</button><button type="button" onClick={() => setShowForm(false)} className="px-4 py-2 rounded-lg bg-slate-200 dark:bg-slate-700">Cancel</button></div>
               </form>}
-              {data.entries.length === 0 ? <p className="text-sm text-slate-500">No completed sleep yet.</p> : <div className="space-y-2">{data.entries.map(entry => <div key={entry.id} className="flex flex-wrap items-center justify-between gap-2 p-3 border border-slate-200 dark:border-slate-700 rounded-lg text-sm">
+              {historyEntries.length === 0 ? <p className="text-sm text-slate-500">{data.entries.length === 0 ? 'No completed sleep yet.' : 'No sleep in this period.'}</p> : <div className="space-y-2">{historyEntries.map(entry => <div key={entry.id} className="flex flex-wrap items-center justify-between gap-2 p-3 border border-slate-200 dark:border-slate-700 rounded-lg text-sm">
                 <div><div>{new Date(entry.start_time).toLocaleString()} – {new Date(entry.end_time).toLocaleString()}</div><div className="text-slate-500">{sleepDuration(+new Date(entry.end_time) - +new Date(entry.start_time))}</div></div>
                 <div className="flex gap-3"><button type="button" className="text-indigo-600 dark:text-indigo-400" onClick={() => { setEditing(entry); setStart(sleepLocalInput(entry.start_time)); setEnd(sleepLocalInput(entry.end_time)); setShowForm(true); }}>Edit</button><button type="button" disabled={busy} className="text-red-600 dark:text-red-400" onClick={() => { if (window.confirm('Delete this sleep entry?')) mutate('/api/sleep/' + entry.id, 'DELETE', { expected_start_time: entry.start_time, expected_end_time: entry.end_time }); }}>Delete</button></div>
               </div>)}</div>}
+              {hasEarlierHistory && <button type="button" onClick={() => setHistoryDays(days => days + 7)} className="mt-3 text-sm font-medium text-indigo-600 dark:text-indigo-400">Load more</button>}
             </div>
           </>}
         </section>
