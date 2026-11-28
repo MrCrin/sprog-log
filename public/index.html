@@ -910,7 +910,7 @@
             const key = 'night-' + date + '-' + night.date;
             return <React.Fragment key={key}>
               <button type="button" aria-label={'Night sleep period ' + new Date(original.start).toLocaleString() + ' to ' + (original.ongoing ? 'now' : new Date(original.end).toLocaleString())} aria-expanded={expandedSegment === key} aria-controls={'sleep-segment-' + key} onClick={() => setExpandedSegment(expandedSegment === key ? null : key)} className="absolute h-full bg-indigo-900 hover:bg-indigo-950 dark:bg-indigo-400 dark:hover:bg-indigo-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-white" style={position(night.start, night.end)} />
-              {SleepDisplay.clipIntervals(original.gaps, from, to).map((gap, index) => <span key={index} aria-hidden="true" className="absolute h-full pointer-events-none" style={{ ...position(gap.start, gap.end), background: 'repeating-linear-gradient(135deg, #3730a3 0, #3730a3 3px, #1e1b4b 3px, #1e1b4b 6px)' }} />)}
+              {SleepDisplay.clipIntervals(original.gaps, from, to).map((gap, index) => <span key={index} aria-hidden="true" className="absolute h-full pointer-events-none" style={{ ...position(gap.start, gap.end), background: 'repeating-linear-gradient(135deg, #4f46e5 0, #4f46e5 3px, #4338ca 3px, #4338ca 6px)' }} />)}
             </React.Fragment>;
           })}
           {naps.map(nap => {

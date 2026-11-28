@@ -46,7 +46,7 @@ test('WASO stays in expanded details and the hatch uses darker indigo shades', (
   const mainSummary = html.slice(summaryStart, summaryEnd);
   assert.doesNotMatch(mainSummary, /WASO logged/);
   assert.match(html, /WASO logged: \{sleepDuration\(original\.waso\)\}/);
-  assert.match(html, /repeating-linear-gradient\(135deg, #3730a3 0, #3730a3 3px, #1e1b4b 3px, #1e1b4b 6px\)/);
+  assert.match(html, /repeating-linear-gradient\(135deg, #4f46e5 0, #4f46e5 3px, #4338ca 3px, #4338ca 6px\)/);
   assert.doesNotMatch(html, /#a5b4fc/);
 });
 
