@@ -8,7 +8,20 @@ process.env.TZ = 'Europe/London';
 const html = fs.readFileSync(require('node:path').join(__dirname, '../public/index.html'), 'utf8');
 const source = html.slice(html.indexOf('    function sleepDayBoundary('), html.indexOf('    function sleepDuration('));
 assert.ok(source.includes('function sleepDaySegments'));
-const { sleepDayBoundary, sleepDaySegments } = vm.runInNewContext(source + '\n({ sleepDayBoundary, sleepDaySegments })');
+const { sleepDayBoundary, sleepDaySegments, sleepHistoryEntries } = vm.runInNewContext(source + '\n({ sleepDayBoundary, sleepDaySegments, sleepHistoryEntries })');
+
+test('sleep history expands in calendar-week increments', () => {
+  const now = new Date(2024, 3, 3, 12);
+  const entries = [
+    { id: 1, end_time: new Date(2024, 3, 3, 10).toISOString() },
+    { id: 2, end_time: new Date(2024, 2, 27, 12).toISOString() },
+    { id: 3, end_time: new Date(2024, 2, 25, 10).toISOString() },
+    { id: 4, end_time: new Date(2024, 2, 1, 10).toISOString() },
+  ];
+  assert.deepEqual(Array.from(sleepHistoryEntries(entries, +now, 7), entry => entry.id), [1, 2]);
+  assert.deepEqual(Array.from(sleepHistoryEntries(entries, +now, 14), entry => entry.id), [1, 2, 3]);
+  assert.equal(sleepHistoryEntries(entries, +now, 35).length, entries.length);
+});
 
 test('local day boundaries account for both DST transitions', () => {
   const spring = sleepDayBoundary(new Date(2024, 2, 30), '07:00');
