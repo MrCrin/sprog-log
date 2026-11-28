@@ -17,8 +17,13 @@ function setup(active, completed = []) {
       if (sql.startsWith('SELECT 1')) {
         return { rows: completed.some(entry => Date.parse(entry.end_time) > Date.parse(params[1])) ? [{}] : [] };
       }
+      if (sql.startsWith('UPDATE sleep_entries SET classification_override')) {
+        active.classification_override = params[1];
+        return { rows: [active] };
+      }
       if (sql.startsWith('UPDATE')) {
         active.start_time = new Date(params[0]);
+        if (params.length === 3) active.classification_override = params[2];
         return { rows: [active] };
       }
       throw new Error(`Unexpected query: ${sql}`);
@@ -26,6 +31,7 @@ function setup(active, completed = []) {
   };
   const context = vm.createContext({
     app: { put: (path, fn) => { handler = fn; } },
+    validOverride: value => value === null || value === 'nap' || value === 'overnight',
     activeSleep: async () => active,
     sleepConflict: async (client, error) => ({ status: 409, body: { error, active } }),
     sleepMutation: async (res, operation) => {
@@ -53,6 +59,18 @@ test('updates active start using equivalent expected instant and allows adjacent
   assert.equal(res.body.start_time.toISOString(), '2024-01-02T11:00:00.000Z');
   assert.equal(res.body.end_time, null);
   assert.equal(queries.length, 2);
+});
+
+test('active override edits detect stale metadata and preserve existing values when omitted', async () => {
+  const entry = { ...active(), classification_override: 'nap' };
+  const { handler, queries } = setup(entry);
+  assert.equal((await request(handler, { ...body(), expected_classification_override: null, classification_override: 'overnight' })).code, 409);
+  assert.equal((await request(handler, body())).code, 200);
+  assert.equal(entry.classification_override, 'nap');
+  assert.equal((await request(handler, { ...body(), expected_start_time: '2024-01-02T11:00:00Z', expected_classification_override: 'nap', classification_override: null })).code, 200);
+  assert.equal(entry.classification_override, null);
+  assert.equal(queries.length, 3); // no overlap query for an unchanged instant
+  assert.match(queries.at(-1).sql, /^UPDATE sleep_entries SET classification_override/); // timestamps are not rewritten
 });
 
 test('rejects invalid and future start timestamps', async () => {
