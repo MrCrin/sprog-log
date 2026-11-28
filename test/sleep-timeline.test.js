@@ -8,7 +8,7 @@ process.env.TZ = 'Europe/London';
 const html = fs.readFileSync(require('node:path').join(__dirname, '../public/index.html'), 'utf8');
 const source = html.slice(html.indexOf('    function sleepDayBoundary('), html.indexOf('    function sleepDuration('));
 assert.ok(source.includes('function sleepDaySegments'));
-const { sleepDayBoundary, sleepDaySegments, sleepHistoryEntries } = vm.runInNewContext(source + '\n({ sleepDayBoundary, sleepDaySegments, sleepHistoryEntries })');
+const { sleepDayBoundary, sleepDaySegments, sleepTimelineRows, scrollToLoadedTimelineEnd, sleepHistoryEntries } = vm.runInNewContext(source + '\n({ sleepDayBoundary, sleepDaySegments, sleepTimelineRows, scrollToLoadedTimelineEnd, sleepHistoryEntries })');
 
 test('sleep history expands in calendar-week increments', () => {
   const now = new Date(2024, 3, 3, 12);
@@ -24,9 +24,30 @@ test('sleep history expands in calendar-week increments', () => {
   assert.equal(sleepHistoryEntries(entries, +now, 35).length, entries.length);
 });
 
-test('timeline initially shows seven days and loads a further week', () => {
+test('timeline loads seven additional older days and scrolls them into view', () => {
+  const boundary = sleepDayBoundary(new Date(2024, 3, 3, 12), '07:00');
+  const initial = sleepTimelineRows(boundary, '07:00', 7, [], +boundary);
+  const expanded = sleepTimelineRows(boundary, '07:00', 14, [], +boundary);
+  assert.equal(initial.length, 7);
+  assert.equal(expanded.length, 14);
+  assert.equal(+expanded[13].from, +sleepDayBoundary(boundary, '07:00', -13));
   assert.match(html, /const \[days, setDays\] = useState\(7\)/);
   assert.match(html, /setDays\(days => days \+ 7\)/);
+  assert.match(html, /days > previousTimelineDays\.current\) scrollToLoadedTimelineEnd\(timelineScrollRef\.current\)/);
+  assert.match(html, /ref=\{timelineScrollRef\}/);
+  const container = { scrollTop: 0, scrollHeight: 980 };
+  scrollToLoadedTimelineEnd(container);
+  assert.equal(container.scrollTop, 980);
+});
+
+test('WASO stays in expanded details and the hatch uses darker indigo shades', () => {
+  const summaryStart = html.indexOf('Nap total: ');
+  const summaryEnd = html.indexOf('</div>', summaryStart);
+  const mainSummary = html.slice(summaryStart, summaryEnd);
+  assert.doesNotMatch(mainSummary, /WASO logged/);
+  assert.match(html, /WASO logged: \{sleepDuration\(original\.waso\)\}/);
+  assert.match(html, /repeating-linear-gradient\(135deg, #3730a3 0, #3730a3 3px, #1e1b4b 3px, #1e1b4b 6px\)/);
+  assert.doesNotMatch(html, /#a5b4fc/);
 });
 
 test('local day boundaries account for both DST transitions', () => {

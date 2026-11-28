@@ -864,6 +864,18 @@
         return b > a ? { record, a, b } : null;
       }).filter(Boolean);
     }
+    function sleepTimelineRows(currentBoundary, dayStart, days, records, now) {
+      const rows = [];
+      for (let i = 0; i < days; i++) {
+        const from = sleepDayBoundary(currentBoundary, dayStart, -i);
+        const to = sleepDayBoundary(from, dayStart, 1);
+        rows.push({ from, to, segments: sleepDaySegments(records, from, to, now) });
+      }
+      return rows;
+    }
+    function scrollToLoadedTimelineEnd(container) {
+      if (container) container.scrollTop = container.scrollHeight;
+    }
     function sleepHistoryEntries(entries, now, days) {
       const cutoff = new Date(now);
       cutoff.setDate(cutoff.getDate() - days);
@@ -891,14 +903,14 @@
       const { naps, nights, previousNight, napDuration } = SleepDisplay.rowSummary(grouped, row.from, row.to);
       const position = (start, end) => ({ left: ((start - from) / (to - from) * 100) + '%', width: ((end - start) / (to - from) * 100) + '%' });
       return <div>
-        <div className="flex flex-wrap justify-between gap-1 text-sm mb-1"><span>{row.from.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}</span><span>Nap total: {sleepDuration(napDuration)} · Night sleep period: {previousNight ? sleepDuration(previousNight.end - previousNight.start) + (previousNight.ongoing ? ' (ongoing)' : '') : '—'} · WASO logged: {previousNight ? sleepDuration(previousNight.waso) : '—'}</span></div>
+        <div className="flex flex-wrap justify-between gap-1 text-sm mb-1"><span>{row.from.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}</span><span>Nap total: {sleepDuration(napDuration)} · Night sleep period: {previousNight ? sleepDuration(previousNight.end - previousNight.start) + (previousNight.ongoing ? ' (ongoing)' : '') : '—'}</span></div>
         <div className="relative h-6 rounded bg-slate-200 dark:bg-slate-700 overflow-hidden" aria-label={'Sleep on ' + row.from.toLocaleDateString()}>
           {nights.map(night => {
             const original = grouped.nights.find(n => n.date === night.date);
             const key = 'night-' + date + '-' + night.date;
             return <React.Fragment key={key}>
               <button type="button" aria-label={'Night sleep period ' + new Date(original.start).toLocaleString() + ' to ' + (original.ongoing ? 'now' : new Date(original.end).toLocaleString())} aria-expanded={expandedSegment === key} aria-controls={'sleep-segment-' + key} onClick={() => setExpandedSegment(expandedSegment === key ? null : key)} className="absolute h-full bg-indigo-900 hover:bg-indigo-950 dark:bg-indigo-400 dark:hover:bg-indigo-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-white" style={position(night.start, night.end)} />
-              {SleepDisplay.clipIntervals(original.gaps, from, to).map((gap, index) => <span key={index} aria-hidden="true" className="absolute h-full pointer-events-none" style={{ ...position(gap.start, gap.end), background: 'repeating-linear-gradient(135deg, #a5b4fc 0, #a5b4fc 3px, #4338ca 3px, #4338ca 6px)' }} />)}
+              {SleepDisplay.clipIntervals(original.gaps, from, to).map((gap, index) => <span key={index} aria-hidden="true" className="absolute h-full pointer-events-none" style={{ ...position(gap.start, gap.end), background: 'repeating-linear-gradient(135deg, #3730a3 0, #3730a3 3px, #1e1b4b 3px, #1e1b4b 6px)' }} />)}
             </React.Fragment>;
           })}
           {naps.map(nap => {
@@ -920,6 +932,8 @@
       const [refreshedAt, setRefreshedAt] = useState(null);
       const [now, setNow] = useState(Date.now());
       const [days, setDays] = useState(7);
+      const timelineScrollRef = useRef(null);
+      const previousTimelineDays = useRef(7);
       const [expandedSegment, setExpandedSegment] = useState(null);
       const [historyDays, setHistoryDays] = useState(7);
       const [editing, setEditing] = useState(null);
@@ -944,6 +958,10 @@
           setRefreshing(count => count - 1);
         }
       };
+      useEffect(() => {
+        if (days > previousTimelineDays.current) scrollToLoadedTimelineEnd(timelineScrollRef.current);
+        previousTimelineDays.current = days;
+      }, [days]);
       useEffect(() => {
         refresh();
         const timer = setInterval(() => { refresh(); }, 15000);
@@ -1004,13 +1022,7 @@
       const grouped = data && !invalidDisplaySettings && data.nap_night_mode ? SleepDisplay.groupNights(records, data, now) : null;
       let currentBoundary = sleepDayBoundary(new Date(now), dayStart);
       if (+currentBoundary > now) currentBoundary = sleepDayBoundary(currentBoundary, dayStart, -1);
-      const rows = [];
-      for (let i = 0; i < days; i++) {
-        const from = sleepDayBoundary(currentBoundary, dayStart, -i);
-        const to = sleepDayBoundary(from, dayStart, 1);
-        const segments = sleepDaySegments(records, from, to, now);
-        rows.push({ from, to, segments });
-      }
+      const rows = sleepTimelineRows(currentBoundary, dayStart, days, records, now);
       const historyEntries = data ? sleepHistoryEntries(data.entries, now, historyDays) : [];
       const historyClassification = entry => {
         if (!grouped) return null;
@@ -1052,7 +1064,7 @@
               <button type="button" disabled={busy} onClick={() => { setEditingActive(null); mutate('/api/sleep/' + (data.active ? 'stop' : 'start'), 'POST', data.active ? { id: data.active.id } : {}); }} className={button + ' w-full sm:w-auto'}>{data.active ? 'End sleep' : 'Start sleep'}</button>
             </div>
             <div><h3 className="font-semibold mb-1">Sleep timeline</h3><p className="text-sm text-slate-500 dark:text-slate-400 mb-3">Days begin at {dayStart} in your local time. Bars show elapsed time between local day boundaries.</p>
-              <div className="space-y-3 max-h-96 overflow-y-auto">{rows.map(row => grouped && SleepDisplay.enabledForDate(data, row.from) ? <NightDisplayRow key={+row.from} row={row} grouped={grouped} expandedSegment={expandedSegment} setExpandedSegment={setExpandedSegment} /> : <div key={+row.from}>
+              <div ref={timelineScrollRef} className="space-y-3 max-h-96 overflow-y-auto">{rows.map(row => grouped && SleepDisplay.enabledForDate(data, row.from) ? <NightDisplayRow key={+row.from} row={row} grouped={grouped} expandedSegment={expandedSegment} setExpandedSegment={setExpandedSegment} /> : <div key={+row.from}>
                 <div className="flex justify-between text-sm mb-1"><span>{row.from.toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}</span><span>{sleepDuration(row.segments.reduce((sum, s) => sum + s.b - s.a, 0))}</span></div>
                 <div className="relative h-6 rounded bg-slate-200 dark:bg-slate-700 overflow-hidden" aria-label={'Sleep on ' + row.from.toLocaleDateString() + ': ' + sleepDuration(row.segments.reduce((sum, s) => sum + s.b - s.a, 0))}>
                   {row.segments.map(s => {
