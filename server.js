@@ -33,6 +33,32 @@ const pool = new Pool({
 // This automatically serves the index.html file from your new 'public' folder
 app.use(express.static(path.join(__dirname, 'public')));
 
+// Add the override column and enforce its allowed values independently. Putting
+// CHECK on ADD COLUMN IF NOT EXISTS is insufficient: PostgreSQL skips the
+// entire column definition (including its constraint) if a partial migration
+// already created the column.
+async function ensureSleepOverrideSchema() {
+  await pool.query('ALTER TABLE sleep_entries ADD COLUMN IF NOT EXISTS classification_override TEXT');
+  await pool.query(`
+    DO $migration$
+    BEGIN
+      -- Serialize concurrent application startups running this migration.
+      PERFORM pg_advisory_xact_lock(73657267, 2);
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conrelid = 'sleep_entries'::regclass
+          AND conname = 'sleep_entries_classification_override_check'
+      ) THEN
+        ALTER TABLE sleep_entries
+          ADD CONSTRAINT sleep_entries_classification_override_check
+          CHECK (classification_override IS NULL OR classification_override IN ('nap', 'overnight'));
+      END IF;
+    END;
+    $migration$;
+  `);
+}
+
 // ==========================================
 // 2. DATABASE SCHEMA BOOTSTRAP
 // ==========================================
@@ -74,8 +100,7 @@ async function initDb() {
       CHECK (end_time IS NULL OR end_time > start_time)
     )
   `);
-  // The inline check is created with the column, and ADD COLUMN is idempotent.
-  await pool.query("ALTER TABLE sleep_entries ADD COLUMN IF NOT EXISTS classification_override TEXT CHECK (classification_override IS NULL OR classification_override IN ('nap', 'overnight'))");
+  await ensureSleepOverrideSchema();
   await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS sleep_one_active ON sleep_entries ((1)) WHERE end_time IS NULL');
   await pool.query('CREATE INDEX IF NOT EXISTS sleep_start_time_idx ON sleep_entries (start_time DESC)');
   // Added for the milestone details/icon feature. Idempotent so existing
