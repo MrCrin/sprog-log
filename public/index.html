@@ -848,7 +848,7 @@
       const [refreshing, setRefreshing] = useState(0);
       const [refreshedAt, setRefreshedAt] = useState(null);
       const [now, setNow] = useState(Date.now());
-      const [days, setDays] = useState(14);
+      const [days, setDays] = useState(7);
       const [expandedSegment, setExpandedSegment] = useState(null);
       const [historyDays, setHistoryDays] = useState(7);
       const [editing, setEditing] = useState(null);
@@ -925,7 +925,7 @@
       };
       return (
         <section aria-label="Sleep" className="space-y-6">
-          <div className="flex flex-wrap items-center justify-between gap-3"><h2 className="text-xl font-bold">Sleep</h2><button type="button" onClick={refresh} aria-label={refreshing ? 'Refreshing sleep data' : 'Refresh sleep data'} title="Refresh sleep data" className="p-2 text-indigo-600 dark:text-indigo-400"><svg className={'w-5 h-5 ' + (refreshing ? 'animate-spin' : '')} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M20 7v5h-5"/><path d="M4 17v-5h5"/><path d="M5.6 9A7 7 0 0 1 18 6l2 6M4 12l2 6a7 7 0 0 0 12.4-3"/></svg></button></div>
+          <div className="flex flex-wrap items-center justify-between gap-3"><h2 className="text-xl font-bold">Sleep</h2><button type="button" onClick={refresh} aria-label={refreshing ? 'Refreshing sleep data' : 'Refresh sleep data'} title="Refresh sleep data" className="p-2 text-indigo-600 dark:text-indigo-400"><svg className={'w-5 h-5 ' + (refreshing ? 'animate-spin' : '')} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg></button></div>
           <p role="status" className="text-xs text-slate-500 dark:text-slate-400">{refreshing ? 'Refreshing sleep data…' : refreshedAt ? 'Updated at ' + new Date(refreshedAt).toLocaleTimeString() : ''}</p>
           {error && <p role="alert" className="text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950/40 rounded-lg p-3">{error}</p>}
           {!data ? <p>{error ? 'Sleep data is unavailable. Use Refresh to retry.' : 'Loading sleep data…'}</p> : <>
@@ -954,7 +954,7 @@
                   </div>;
                 })}
               </div>)}</div>
-              <button type="button" onClick={() => setDays(days + 14)} className="mt-3 text-sm font-medium text-indigo-600 dark:text-indigo-400">Show earlier days</button>
+              <button type="button" onClick={() => setDays(days => days + 7)} className="mt-3 text-sm font-medium text-indigo-600 dark:text-indigo-400">Load more</button>
             </div>
             <div><div className="flex flex-wrap justify-between items-center gap-2 mb-3"><h3 className="font-semibold">Sleep history</h3><button type="button" className={button} onClick={() => { setEditing(null); setStart(''); setEnd(''); setShowForm(true); }}>Add sleep</button></div>
               {showForm && <form onSubmit={submit} className="space-y-3 mb-4 p-4 border border-slate-200 dark:border-slate-700 rounded-lg">
