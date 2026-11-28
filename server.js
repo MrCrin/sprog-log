@@ -641,6 +641,24 @@ app.post('/api/sleep/start', async (req, res) => {
   });
 });
 
+app.put('/api/sleep/active/start', async (req, res) => {
+  const { id, start_time, expected_start_time } = req.body || {};
+  if (!validSleepTimestamp(start_time)) return res.status(400).json({ error: 'start_time must be a valid timestamp with timezone' });
+  if (Date.parse(start_time) > Date.now()) return res.status(400).json({ error: 'sleep timestamps cannot be in the future' });
+  await sleepMutation(res, async client => {
+    const active = await activeSleep(client);
+    if (!active || String(active.id) !== String(id) || !validSleepTimestamp(expected_start_time) ||
+        Date.parse(expected_start_time) !== new Date(active.start_time).getTime()) {
+      return sleepConflict(client, 'Active sleep has changed');
+    }
+    // The active interval extends indefinitely, so any later completed entry overlaps it.
+    const overlap = await client.query('SELECT 1 FROM sleep_entries WHERE id <> $1 AND (end_time IS NULL OR end_time > $2::timestamptz) LIMIT 1', [active.id, start_time]);
+    if (overlap.rows.length) return sleepConflict(client, 'Sleep overlaps an existing entry');
+    const result = await client.query('UPDATE sleep_entries SET start_time = $1 WHERE id = $2 AND end_time IS NULL RETURNING *', [start_time, active.id]);
+    return { body: result.rows[0] };
+  });
+});
+
 app.post('/api/sleep/stop', async (req, res) => {
   await sleepMutation(res, async client => {
     const active = await activeSleep(client);
