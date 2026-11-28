@@ -74,6 +74,8 @@ async function initDb() {
       CHECK (end_time IS NULL OR end_time > start_time)
     )
   `);
+  // The inline check is created with the column, and ADD COLUMN is idempotent.
+  await pool.query("ALTER TABLE sleep_entries ADD COLUMN IF NOT EXISTS classification_override TEXT CHECK (classification_override IS NULL OR classification_override IN ('nap', 'overnight'))");
   await pool.query('CREATE UNIQUE INDEX IF NOT EXISTS sleep_one_active ON sleep_entries ((1)) WHERE end_time IS NULL');
   await pool.query('CREATE INDEX IF NOT EXISTS sleep_start_time_idx ON sleep_entries (start_time DESC)');
   // Added for the milestone details/icon feature. Idempotent so existing
@@ -605,13 +607,50 @@ async function overlapsSleep(client, start, end, excludeId) {
   return result.rows.length > 0;
 }
 
+const DISPLAY_DEFAULTS = {
+  nap_night_mode: false,
+  nap_night_effective_date: null,
+  nap_night_bedtime: '19:00',
+  nap_night_wake_time: '07:00'
+};
+const validTime = value => typeof value === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(value);
+const validOverride = value => value === null || value === 'nap' || value === 'overnight';
+
+function validateDisplaySettings(settings) {
+  const date = settings.nap_night_effective_date;
+  if (typeof settings.nap_night_mode !== 'boolean' ||
+      !(date === null || (typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date) && !date.startsWith('0000-') && backupDate(date) === date)) ||
+      (settings.nap_night_mode && !date) ||
+      !validTime(settings.nap_night_bedtime) || !validTime(settings.nap_night_wake_time) ||
+      settings.nap_night_bedtime === settings.nap_night_wake_time) return 'Invalid display settings';
+  return null;
+}
+
+async function readSleepSettings(client) {
+  const result = await client.query("SELECT key, value FROM app_settings WHERE key IN ('sleep_day_start', 'nap_night_mode', 'nap_night_effective_date', 'nap_night_bedtime', 'nap_night_wake_time')");
+  const values = Object.fromEntries(result.rows.map(row => [row.key, row.value]));
+  return {
+    day_start: values.sleep_day_start || '07:00',
+    nap_night_mode: values.nap_night_mode === undefined ? false : values.nap_night_mode === 'true' ? true : values.nap_night_mode === 'false' ? false : values.nap_night_mode,
+    nap_night_effective_date: values.nap_night_effective_date || null,
+    nap_night_bedtime: values.nap_night_bedtime || DISPLAY_DEFAULTS.nap_night_bedtime,
+    nap_night_wake_time: values.nap_night_wake_time || DISPLAY_DEFAULTS.nap_night_wake_time
+  };
+}
+
+async function writeDisplaySettings(client, settings) {
+  for (const key of Object.keys(DISPLAY_DEFAULTS)) {
+    await client.query('INSERT INTO app_settings (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value', [key, String(settings[key] ?? '')]);
+  }
+}
+
 app.get('/api/sleep', async (req, res) => {
   try {
     const result = await pool.query('SELECT * FROM sleep_entries ORDER BY start_time DESC, id DESC');
-    const settings = await pool.query("SELECT value FROM app_settings WHERE key = 'sleep_day_start'");
+    const settings = await readSleepSettings(pool);
     const entries = result.rows.filter(row => row.end_time !== null);
     res.json({ entries, active: result.rows.find(row => row.end_time === null) || null,
-      latest_completed: entries[0] || null, day_start: settings.rows[0]?.value || '07:00' });
+      latest_completed: entries[0] || null, ...settings });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Server error fetching sleep' });
@@ -629,6 +668,19 @@ app.put('/api/sleep/day-start', async (req, res) => {
   });
 });
 
+app.put('/api/sleep/display-settings', async (req, res) => {
+  const settings = { ...(req.body || {}) };
+  for (const key of ['nap_night_bedtime', 'nap_night_wake_time']) {
+    if (settings[key] === undefined || settings[key] === null || settings[key] === '') settings[key] = DISPLAY_DEFAULTS[key];
+  }
+  const error = validateDisplaySettings(settings);
+  if (error) return res.status(400).json({ error });
+  await sleepMutation(res, async client => {
+    await writeDisplaySettings(client, settings);
+    return { body: Object.fromEntries(Object.keys(DISPLAY_DEFAULTS).map(key => [key, settings[key]])) };
+  });
+});
+
 app.post('/api/sleep/start', async (req, res) => {
   await sleepMutation(res, async client => {
     const active = await activeSleep(client);
@@ -643,18 +695,31 @@ app.post('/api/sleep/start', async (req, res) => {
 
 app.put('/api/sleep/active/start', async (req, res) => {
   const { id, start_time, expected_start_time } = req.body || {};
+  if (Object.hasOwn(req.body || {}, 'classification_override') && !validOverride(req.body.classification_override)) return res.status(400).json({ error: 'Invalid classification override' });
+  if (Object.hasOwn(req.body || {}, 'expected_classification_override') && !validOverride(req.body.expected_classification_override)) return res.status(400).json({ error: 'Invalid expected classification override' });
   if (!validSleepTimestamp(start_time)) return res.status(400).json({ error: 'start_time must be a valid timestamp with timezone' });
   if (Date.parse(start_time) > Date.now()) return res.status(400).json({ error: 'sleep timestamps cannot be in the future' });
   await sleepMutation(res, async client => {
     const active = await activeSleep(client);
     if (!active || String(active.id) !== String(id) || !validSleepTimestamp(expected_start_time) ||
-        Date.parse(expected_start_time) !== new Date(active.start_time).getTime()) {
+        Date.parse(expected_start_time) !== new Date(active.start_time).getTime() ||
+        (Object.hasOwn(req.body || {}, 'expected_classification_override') && req.body.expected_classification_override !== (active.classification_override ?? null))) {
       return sleepConflict(client, 'Active sleep has changed');
     }
-    // The active interval extends indefinitely, so any later completed entry overlaps it.
-    const overlap = await client.query('SELECT 1 FROM sleep_entries WHERE id <> $1 AND (end_time IS NULL OR end_time > $2::timestamptz) LIMIT 1', [active.id, start_time]);
-    if (overlap.rows.length) return sleepConflict(client, 'Sleep overlaps an existing entry');
-    const result = await client.query('UPDATE sleep_entries SET start_time = $1 WHERE id = $2 AND end_time IS NULL RETURNING *', [start_time, active.id]);
+    // PostgreSQL stores microseconds, while JSON/Date only preserves milliseconds.
+    // A display-only edit must leave the actual stored instant untouched, and
+    // must not turn an adjacent interval into an apparent overlap by rounding.
+    const overrideOnly = Object.hasOwn(req.body || {}, 'classification_override') && Date.parse(start_time) === new Date(active.start_time).getTime();
+    if (!overrideOnly) {
+      // The active interval extends indefinitely, so any later completed entry overlaps it.
+      const overlap = await client.query('SELECT 1 FROM sleep_entries WHERE id <> $1 AND (end_time IS NULL OR end_time > $2::timestamptz) LIMIT 1', [active.id, start_time]);
+      if (overlap.rows.length) return sleepConflict(client, 'Sleep overlaps an existing entry');
+    }
+    const result = overrideOnly
+      ? await client.query('UPDATE sleep_entries SET classification_override = $2 WHERE id = $1 AND end_time IS NULL RETURNING *', [active.id, req.body.classification_override])
+      : Object.hasOwn(req.body || {}, 'classification_override')
+        ? await client.query('UPDATE sleep_entries SET start_time = $1, classification_override = $3 WHERE id = $2 AND end_time IS NULL RETURNING *', [start_time, active.id, req.body.classification_override])
+        : await client.query('UPDATE sleep_entries SET start_time = $1 WHERE id = $2 AND end_time IS NULL RETURNING *', [start_time, active.id]);
     return { body: result.rows[0] };
   });
 });
@@ -670,18 +735,21 @@ app.post('/api/sleep/stop', async (req, res) => {
 });
 
 app.post('/api/sleep', async (req, res) => {
-  const { start_time, end_time } = req.body || {};
+  const { start_time, end_time, classification_override = null } = req.body || {};
+  if (!validOverride(classification_override)) return res.status(400).json({ error: 'Invalid classification override' });
   const error = validateSleepInterval(start_time, end_time);
   if (error) return res.status(400).json({ error });
   await sleepMutation(res, async client => {
     if (await overlapsSleep(client, start_time, end_time, null)) return sleepConflict(client, 'Sleep overlaps an existing entry');
-    const result = await client.query('INSERT INTO sleep_entries (start_time, end_time) VALUES ($1, $2) RETURNING *', [start_time, end_time]);
+    const result = await client.query('INSERT INTO sleep_entries (start_time, end_time, classification_override) VALUES ($1, $2, $3) RETURNING *', [start_time, end_time, classification_override]);
     return { body: result.rows[0] };
   });
 });
 
 app.put('/api/sleep/:id', async (req, res) => {
   const { start_time, end_time } = req.body || {};
+  if (Object.hasOwn(req.body || {}, 'classification_override') && !validOverride(req.body.classification_override)) return res.status(400).json({ error: 'Invalid classification override' });
+  if (Object.hasOwn(req.body || {}, 'expected_classification_override') && !validOverride(req.body.expected_classification_override)) return res.status(400).json({ error: 'Invalid expected classification override' });
   const error = validateSleepInterval(start_time, end_time);
   if (error) return res.status(400).json({ error });
   if (!/^[1-9]\d*$/.test(req.params.id) || Number(req.params.id) > 2147483647) return res.status(400).json({ error: 'Invalid sleep id' });
@@ -689,9 +757,17 @@ app.put('/api/sleep/:id', async (req, res) => {
     const existing = await client.query('SELECT * FROM sleep_entries WHERE id = $1', [req.params.id]);
     if (!existing.rows.length) return { status: 404, body: { error: 'Sleep entry not found' } };
     if (existing.rows[0].end_time === null) return sleepConflict(client, 'Cannot edit active sleep');
-    if (!matchesExpectedSleep(existing.rows[0], req.body || {})) return { status: 409, body: { error: 'Sleep entry has changed', active: await activeSleep(client), entry: existing.rows[0] } };
-    if (await overlapsSleep(client, start_time, end_time, req.params.id)) return sleepConflict(client, 'Sleep overlaps an existing entry');
-    const result = await client.query('UPDATE sleep_entries SET start_time = $1, end_time = $2 WHERE id = $3 RETURNING *', [start_time, end_time, req.params.id]);
+    if (!matchesExpectedSleep(existing.rows[0], req.body || {}) ||
+        (Object.hasOwn(req.body || {}, 'expected_classification_override') && req.body.expected_classification_override !== (existing.rows[0].classification_override ?? null))) return { status: 409, body: { error: 'Sleep entry has changed', active: await activeSleep(client), entry: existing.rows[0] } };
+    const overrideOnly = Object.hasOwn(req.body || {}, 'classification_override') &&
+      Date.parse(start_time) === new Date(existing.rows[0].start_time).getTime() &&
+      Date.parse(end_time) === new Date(existing.rows[0].end_time).getTime();
+    if (!overrideOnly && await overlapsSleep(client, start_time, end_time, req.params.id)) return sleepConflict(client, 'Sleep overlaps an existing entry');
+    const result = overrideOnly
+      ? await client.query('UPDATE sleep_entries SET classification_override = $2 WHERE id = $1 RETURNING *', [req.params.id, req.body.classification_override])
+      : Object.hasOwn(req.body || {}, 'classification_override')
+        ? await client.query('UPDATE sleep_entries SET start_time = $1, end_time = $2, classification_override = $4 WHERE id = $3 RETURNING *', [start_time, end_time, req.params.id, req.body.classification_override])
+        : await client.query('UPDATE sleep_entries SET start_time = $1, end_time = $2 WHERE id = $3 RETURNING *', [start_time, end_time, req.params.id]);
     return { body: result.rows[0] };
   });
 });
@@ -777,8 +853,9 @@ function validateBackup(data) {
     result.sleep = data.sleep.map(item => {
       if (!item || typeof item !== 'object') throw new Error('Invalid sleep entry');
       const start = backupTimestamp(item.start_time), end = backupTimestamp(item.end_time);
-      if (start === null || end === null || start >= end || end > now) throw new Error('Invalid sleep entry');
-      return { start_time: new Date(start).toISOString(), end_time: new Date(end).toISOString() };
+      const override = hasOwn(item, 'classification_override') ? item.classification_override : null;
+      if (start === null || end === null || start >= end || end > now || !validOverride(override)) throw new Error('Invalid sleep entry');
+      return { start_time: new Date(start).toISOString(), end_time: new Date(end).toISOString(), classification_override: override };
     }).sort((a, b) => a.start_time.localeCompare(b.start_time));
     for (let i = 1; i < result.sleep.length; i++) {
       if (result.sleep[i].start_time < result.sleep[i - 1].end_time) throw new Error('Sleep entries overlap');
@@ -787,7 +864,9 @@ function validateBackup(data) {
   if (hasOwn(data, 'settings')) {
     if (!data.settings || typeof data.settings !== 'object' || Array.isArray(data.settings) ||
         typeof data.settings.day_start !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(data.settings.day_start)) throw new Error('Invalid settings');
-    result.settings = { day_start: data.settings.day_start };
+    const display = { ...DISPLAY_DEFAULTS, ...Object.fromEntries(Object.keys(DISPLAY_DEFAULTS).filter(key => hasOwn(data.settings, key)).map(key => [key, data.settings[key]])) };
+    if (validateDisplaySettings(display)) throw new Error('Invalid settings');
+    result.settings = { day_start: data.settings.day_start, ...display };
   }
   return result;
 }
@@ -814,11 +893,10 @@ app.get('/api/backup', async (req, res) => {
       backup.milestones = (await client.query("SELECT to_char(date, 'YYYY-MM-DD') AS date, description, details, icon FROM milestones ORDER BY date, id")).rows;
     }
     if (selected.includes('sleep')) {
-      backup.sleep = (await client.query('SELECT start_time, end_time FROM sleep_entries WHERE end_time IS NOT NULL ORDER BY start_time, id')).rows;
+      backup.sleep = (await client.query('SELECT start_time, end_time, classification_override FROM sleep_entries WHERE end_time IS NOT NULL ORDER BY start_time, id')).rows;
     }
     if (selected.includes('settings')) {
-      const setting = await client.query("SELECT value FROM app_settings WHERE key = 'sleep_day_start'");
-      backup.settings = { day_start: setting.rows[0] ? setting.rows[0].value : '07:00' };
+      backup.settings = await readSleepSettings(client);
     }
     await client.query('COMMIT');
     res.json(backup);
@@ -878,10 +956,11 @@ app.post('/api/backup/import', async (req, res) => {
     }
     if (hasOwn(data, 'sleep')) {
       await client.query('DELETE FROM sleep_entries');
-      for (const item of data.sleep) await client.query('INSERT INTO sleep_entries (start_time, end_time) VALUES ($1, $2)', [item.start_time, item.end_time]);
+      for (const item of data.sleep) await client.query('INSERT INTO sleep_entries (start_time, end_time, classification_override) VALUES ($1, $2, $3)', [item.start_time, item.end_time, item.classification_override]);
     }
     if (hasOwn(data, 'settings')) {
       await client.query("INSERT INTO app_settings (key, value) VALUES ('sleep_day_start', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", [data.settings.day_start]);
+      await writeDisplaySettings(client, data.settings);
     }
     await client.query('COMMIT');
     res.json({ message: 'Import successful' });
